@@ -1,6 +1,6 @@
-// Rally — Typography tokens
+// FamilyChats — Typography tokens
 // Ported from tokens/typography.css. Font family names match the keys
-// registered by useFonts() in src/theme/useRallyFonts.ts.
+// registered by useFonts() in src/theme/useFamilyChatsFonts.ts.
 
 export const fontFamily = {
   display: 'BricolageGrotesque_800ExtraBold',

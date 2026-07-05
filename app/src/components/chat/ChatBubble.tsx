@@ -13,7 +13,7 @@ export interface ChatBubbleProps {
 }
 
 /**
- * Rally ChatBubble — the signature message bubble.
+ * FamilyChats ChatBubble — the signature message bubble.
  * `mine` = coral, right-aligned, tucked bottom-right corner.
  * others = white, left-aligned, tucked bottom-left corner.
  */

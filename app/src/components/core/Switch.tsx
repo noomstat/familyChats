@@ -15,7 +15,7 @@ const HEIGHT = 28;
 const KNOB = 22;
 const PAD = 3;
 
-/** Rally Switch — toggle. Coral when on (or green for location toggles via tone="live"). */
+/** FamilyChats Switch — toggle. Coral when on (or green for location toggles via tone="live"). */
 export function Switch({ checked = false, onChange, disabled = false, tone = 'brand', style }: SwitchProps) {
   const onColor = tone === 'live' ? semantic.live : semantic.brand;
   const anim = useRef(new Animated.Value(checked ? 1 : 0)).current;

@@ -14,7 +14,7 @@ export interface MapPinProps {
 }
 
 /**
- * Rally MapPin — the coral teardrop marker. Holds an avatar image, initials,
+ * FamilyChats MapPin — the coral teardrop marker. Holds an avatar image, initials,
  * or an icon. This is the brand's most recognizable shape.
  */
 export function MapPin({ src, label, icon, size = 44, color = semantic.brand, live = false, style }: MapPinProps) {

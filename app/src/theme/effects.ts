@@ -1,4 +1,4 @@
-// Rally — Elevation & effects tokens
+// FamilyChats — Elevation & effects tokens
 // Warm-tinted shadows (never pure black), soft and low for a tactile feel.
 // Ported from tokens/effects.css. RN doesn't support multi-layer CSS box-shadow,
 // so each token below is the closest single-layer { shadowColor, shadowOffset,

@@ -19,7 +19,7 @@ const TONES: Record<ChipTone, { bg: string; fg: string; border: string }> = {
   live: { bg: semantic.liveSoft, fg: colors.ping700, border: colors.ping200 },
 };
 
-/** Rally Chip — selectable pill, used for filters, place suggestions, quick replies. */
+/** FamilyChats Chip — selectable pill, used for filters, place suggestions, quick replies. */
 export function Chip({ children, selected = false, leading, onPress, tone = 'neutral', style }: ChipProps) {
   const base = TONES[tone];
   const sel = selected

@@ -5,13 +5,13 @@ import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 import { RootNavigator } from './src/navigation/RootNavigator';
-import { useRallyFonts } from './src/theme';
+import { useFamilyChatsFonts } from './src/theme';
 import { semantic } from './src/theme';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function App() {
-  const [fontsLoaded, fontError] = useRallyFonts();
+  const [fontsLoaded, fontError] = useFamilyChatsFonts();
 
   const onLayout = useCallback(async () => {
     if (fontsLoaded || fontError) {

@@ -31,7 +31,7 @@ const VARIANTS: Record<ButtonVariant, { bg: string; fg: string; border?: string;
   danger: { bg: semantic.danger, fg: colors.white, shadow: shadow.sm },
 };
 
-/** Rally Button — the primary action control. Coral "signal" fill for primary; friendly pill geometry. */
+/** FamilyChats Button — the primary action control. Coral "signal" fill for primary; friendly pill geometry. */
 export function Button({
   children,
   variant = 'primary',

@@ -1,5 +1,5 @@
-// Rally — Spacing, radius, sizing tokens
-// Base unit: 4px. Rally leans on generous, friendly spacing.
+// FamilyChats — Spacing, radius, sizing tokens
+// Base unit: 4px. FamilyChats leans on generous, friendly spacing.
 // Ported from tokens/spacing.css.
 
 export const space = {
@@ -18,7 +18,7 @@ export const space = {
   12: 96,
 } as const;
 
-// Radii — Rally is round & friendly (chat bubbles, pins)
+// Radii — FamilyChats is round & friendly (chat bubbles, pins)
 export const radius = {
   xs: 6,
   sm: 10,

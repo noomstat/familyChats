@@ -12,7 +12,7 @@ export interface LivePillProps {
   style?: StyleProp<ViewStyle>;
 }
 
-/** Rally LivePill — the "sharing live location" status pill with a pulsing dot. */
+/** FamilyChats LivePill — the "sharing live location" status pill with a pulsing dot. */
 export function LivePill({ label = 'Sharing live', timeLeft, onStop, compact = false, style }: LivePillProps) {
   return (
     <View

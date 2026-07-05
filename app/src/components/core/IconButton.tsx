@@ -27,7 +27,7 @@ const VARIANTS: Record<IconButtonVariant, { bg: string; fg: string; border?: str
   ghost: { bg: 'transparent', fg: semantic.textBody, shadow: {} },
 };
 
-/** Rally IconButton — circular icon-only control (composer actions, nav). */
+/** FamilyChats IconButton — circular icon-only control (composer actions, nav). */
 export function IconButton({
   name,
   variant = 'ghost',

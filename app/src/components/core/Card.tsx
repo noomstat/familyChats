@@ -14,7 +14,7 @@ export interface CardProps {
 
 const PADS: Record<CardPadding, number> = { none: 0, sm: space[4], md: space[5], lg: space[6] };
 
-/** Rally Card — the base surface. White, softly rounded, warm shadow. */
+/** FamilyChats Card — the base surface. White, softly rounded, warm shadow. */
 export function Card({ children, padding = 'lg', elevation = 'sm', style }: CardProps) {
   return (
     <View

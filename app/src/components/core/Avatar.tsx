@@ -38,7 +38,7 @@ function initialsOf(name: string) {
     .join('');
 }
 
-/** Rally Avatar — round user image or initials, with optional presence ring/dot. */
+/** FamilyChats Avatar — round user image or initials, with optional presence ring/dot. */
 export function Avatar({ src, name = '', size = 40, presence = null, ring = false, color, style }: AvatarProps) {
   const initials = initialsOf(name);
   const bg = color || pickColor(name);

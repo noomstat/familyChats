@@ -1,5 +1,5 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
-import type { Group } from '../data/rally';
+import type { Group } from '../data/familyChats';
 
 export type ChatsStackParamList = {
   ChatList: undefined;

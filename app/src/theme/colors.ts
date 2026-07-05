@@ -1,4 +1,4 @@
-// Rally — Color tokens
+// FamilyChats — Color tokens
 // Warm cartography palette: map-pin coral, live-ping green, warm ink + paper.
 // Ported 1:1 from tokens/colors.css in the design system export.
 

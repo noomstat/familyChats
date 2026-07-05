@@ -1,25 +1,38 @@
-# CODING AGENTS: READ THIS FIRST
+# FamilyChats
 
-This is a **handoff bundle** from Claude Design (claude.ai/design).
+A group-chat app with live location sharing and shared-expense splitting — built for families and close groups to coordinate, meet up, and settle costs.
 
-A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported this bundle so a coding agent can implement the designs for real.
+Formerly prototyped under the working name *Rally*; renamed to **FamilyChats**.
 
-## What you should do — IMPORTANT
+## What's here
 
-**Read the chat transcripts first.** There are 1 chat transcript(s) in `chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+| Path | What it is |
+| --- | --- |
+| `app/` | The **React Native (Expo) app** — the real implementation. |
+| `project/` | The **FamilyChats Design System** (HTML/CSS/JSX prototypes, tokens, components, UI kits) exported from [Claude Design](https://claude.ai/design). Source of truth for the visuals. |
+| `chats/` | The design conversation transcript that captures product intent. |
 
-**Find the primary design file under `project/` and read it top to bottom.** The chat transcripts will tell you which file the user was last iterating on. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+## The app
 
-**If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
+A native app (iOS / Android / web via Expo) with four surfaces:
 
-## About the design files
+- **Chats** — group & DM list with live-now / unread filters, search.
+- **Thread** — messaging with inline shared-location tiles and a "share live location" sheet (15 min / 1 hr / until stopped).
+- **Expenses** — income/expense summary grouped **by category** and **by person**, with a shareable receipt. Amounts are in **THB**.
+- **Map** & **You** — live map view and profile/settings.
 
-The design medium is **HTML/CSS/JS** — these are prototypes, not production code. Your job is to **recreate them pixel-perfectly** in whatever technology makes sense for the target codebase (React, Vue, native, whatever fits). Match the visual output; don't copy the prototype's internal structure unless it happens to fit.
+Design language: *warm cartography meets messaging* — coral (`#FF5A3C`) for actions, ping-green for live presence, warm paper neutrals, rounded chat-bubble geometry, and a mono face for coordinates/timestamps.
 
-**Don't render these files in a browser or take screenshots unless the user asks you to.** Everything you need — dimensions, colors, layout rules — is spelled out in the source. Read the HTML and CSS directly; a screenshot won't tell you anything they don't.
+### Run it
 
-## Bundle contents
+```bash
+cd app
+npm install
+npm start        # Expo dev server — press i / a / w for iOS / Android / web
+```
 
-- `README.md` — this file
-- `chats/` — conversation transcripts (read these!)
-- `project/` — the `FamilyChats Design System` project files (HTML prototypes, assets, components)
+Requires Node 18+. Fonts (Bricolage Grotesque, Figtree, Space Mono) load from `@expo-google-fonts`; icons from `lucide-react-native`.
+
+## Status
+
+Core screens, navigation, theme tokens, and the component library are implemented against the design system. Data is currently sample data (`app/src/data/familyChats.ts`) — the next step is wiring a real backend for messaging, presence/location, and the expense ledger.

@@ -8,7 +8,7 @@ import { Avatar } from '../components/core/Avatar';
 import { PresenceDot } from '../components/chat';
 import { ChatBubble } from '../components/chat';
 import { LocationTile, LivePill } from '../components/location';
-import { INITIAL_MESSAGES, ThreadMessage } from '../data/rally';
+import { INITIAL_MESSAGES, ThreadMessage } from '../data/familyChats';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Thread'>;

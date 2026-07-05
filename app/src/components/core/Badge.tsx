@@ -21,7 +21,7 @@ const TONES: Record<BadgeTone, { bg: string; fg: string }> = {
   danger: { bg: semantic.danger, fg: colors.white },
 };
 
-/** Rally Badge — small status/count marker. */
+/** FamilyChats Badge — small status/count marker. */
 export function Badge({ children, tone = 'brand', size = 'md', dot = false, style }: BadgeProps) {
   const t = TONES[tone];
 

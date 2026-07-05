@@ -2,7 +2,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 import { colors, fontFamily, shadow } from '../../theme';
 
-/** Small coral pin-R lockup used next to the "Rally" wordmark in headers. */
+/** Small coral pin-R lockup used next to the "FamilyChats" wordmark in headers. */
 export function PinMark({ size = 30 }: { size?: number }) {
   return (
     <View style={{ width: size, height: size }}>

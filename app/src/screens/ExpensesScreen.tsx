@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
 import { Button, Icon, IconButton, Badge } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { CATEGORIES, INCOME, PEOPLE, RECEIPT, TOTAL, YOU, money } from '../data/rally';
+import { CATEGORIES, INCOME, PEOPLE, RECEIPT, TOTAL, YOU, money } from '../data/familyChats';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Expenses'>;

@@ -6,7 +6,7 @@ import { semantic, fontFamily, fontSize, space } from '../theme';
 import { Icon, IconButton, Input, Chip } from '../components/core';
 import { ConversationRow } from '../components/chat';
 import { PinMark } from '../components/brand/PinMark';
-import { GROUPS, Group } from '../data/rally';
+import { GROUPS, Group } from '../data/familyChats';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'ChatList'>;
@@ -29,11 +29,11 @@ export function ChatListScreen({ navigation }: Props) {
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
             <PinMark size={30} />
-            <Text style={{ fontFamily: fontFamily.display, fontSize: 26, letterSpacing: -0.6, color: semantic.textStrong }}>Rally</Text>
+            <Text style={{ fontFamily: fontFamily.display, fontSize: 26, letterSpacing: -0.6, color: semantic.textStrong }}>FamilyChats</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <IconButton name="bell" variant="soft" size="sm" accessibilityLabel="Notifications" />
-            <IconButton name="plus" variant="primary" size="sm" accessibilityLabel="New rally" />
+            <IconButton name="plus" variant="primary" size="sm" accessibilityLabel="New chat" />
           </View>
         </View>
         <Input value={q} onChangeText={setQ} placeholder="Search groups & places" leading={<Icon name="search" size={18} color={semantic.textMuted} />} />

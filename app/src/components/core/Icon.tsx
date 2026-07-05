@@ -33,10 +33,10 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 
-// Rally uses Lucide (https://lucide.dev) as its icon set — rounded, 2px
-// stroke, matching Rally's friendly geometry. Substituted in the original
+// FamilyChats uses Lucide (https://lucide.dev) as its icon set — rounded, 2px
+// stroke, matching FamilyChats's friendly geometry. Substituted in the original
 // design system because no brand icon set was provided. This registry
-// covers every glyph referenced by the Rally app screens.
+// covers every glyph referenced by the FamilyChats app screens.
 const REGISTRY: Record<string, LucideIcon> = {
   'map-pin': MapPin,
   navigation: Navigation,
@@ -79,7 +79,7 @@ export interface IconProps {
   color?: string;
 }
 
-/** Rally Icon — thin wrapper over Lucide, the brand's icon set. */
+/** FamilyChats Icon — thin wrapper over Lucide, the brand's icon set. */
 export function Icon({ name, size = 20, strokeWidth = 2, color = '#443C34' }: IconProps) {
   const Glyph = REGISTRY[name];
   if (!Glyph) return null;

@@ -17,7 +17,7 @@ export interface LocationTileProps {
 }
 
 /**
- * Rally LocationTile — a compact shared-place / shared-location card.
+ * FamilyChats LocationTile — a compact shared-place / shared-location card.
  * Renders a stylized (non-interactive) map surface with a pin and a label bar.
  */
 export function LocationTile({
@@ -49,7 +49,7 @@ export function LocationTile({
       ]}
     >
       <View style={{ height, backgroundColor: colors.mapBg, overflow: 'hidden' }}>
-        {mapSrc ? <Image source={{ uri: mapSrc }} style={{ width: '100%', height: '100%' }} /> : <RallyMapArt />}
+        {mapSrc ? <Image source={{ uri: mapSrc }} style={{ width: '100%', height: '100%' }} /> : <FamilyChatsMapArt />}
         <View style={{ position: 'absolute', left: '50%', top: '48%', marginLeft: -19, marginTop: -50 }}>
           <MapPin src={pinSrc} icon={pinSrc ? undefined : pinIcon} live={live} size={38} />
         </View>
@@ -80,7 +80,7 @@ export function LocationTile({
 }
 
 /** Stylized map backdrop built from flat color blocks (no external tiles). */
-function RallyMapArt() {
+function FamilyChatsMapArt() {
   return (
     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
       <View style={{ position: 'absolute', right: 0, top: 0, width: '38%', height: '100%', backgroundColor: colors.mapWater, opacity: 0.9 }} />

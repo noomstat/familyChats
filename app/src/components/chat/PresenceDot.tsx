@@ -18,7 +18,7 @@ const COLORS: Record<PresenceState, string> = {
   offline: colors.ink300,
 };
 
-/** Rally PresenceDot — pulsing status dot. `state="live"` pulses green. */
+/** FamilyChats PresenceDot — pulsing status dot. `state="live"` pulses green. */
 export function PresenceDot({ state = 'online', size = 10, pulse, style }: PresenceDotProps) {
   const c = COLORS[state] ?? COLORS.offline;
   const doPulse = pulse ?? state === 'live';

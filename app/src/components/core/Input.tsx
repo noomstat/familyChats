@@ -11,7 +11,7 @@ export interface InputProps extends Pick<TextInputProps, 'value' | 'defaultValue
   style?: StyleProp<ViewStyle>;
 }
 
-/** Rally Input — text field with optional leading/trailing adornments. Rounded well on paper; coral focus ring. */
+/** FamilyChats Input — text field with optional leading/trailing adornments. Rounded well on paper; coral focus ring. */
 export function Input({
   value,
   defaultValue,

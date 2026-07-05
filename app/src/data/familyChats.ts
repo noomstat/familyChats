@@ -1,4 +1,4 @@
-// Fake data for the Rally app prototype — mirrors the sample data used in
+// Fake data for the FamilyChats app prototype — mirrors the sample data used in
 // the design system's ui_kits/app screens.jsx / screens2.jsx / expenses.jsx.
 
 export interface Group {
@@ -36,7 +36,7 @@ export const INITIAL_MESSAGES: ThreadMessage[] = [
   { id: 5, author: 'Mara', text: 'perfect 👌' },
 ];
 
-/** Rally's currency was switched to Thai Baht mid-iteration (see chats/chat1.md). */
+/** FamilyChats's currency was switched to Thai Baht mid-iteration (see chats/chat1.md). */
 export const money = (n: number) => (n < 0 ? '-' : '') + 'THB ' + Math.abs(n).toFixed(2);
 
 export interface Category {

@@ -18,7 +18,7 @@ export interface ConversationRowProps {
   style?: StyleProp<ViewStyle>;
 }
 
-/** Rally ConversationRow — a group/DM row in the chat list. */
+/** FamilyChats ConversationRow — a group/DM row in the chat list. */
 export function ConversationRow({
   name,
   preview,

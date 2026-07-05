@@ -12,11 +12,11 @@ import {
 import { SpaceMono_400Regular, SpaceMono_700Bold } from '@expo-google-fonts/space-mono';
 
 /**
- * Rally's webfonts are Google Fonts stand-ins (see tokens/fonts.css in the
+ * FamilyChats's webfonts are Google Fonts stand-ins (see tokens/fonts.css in the
  * design system export — no licensed brand font files were provided):
  * Bricolage Grotesque (display), Figtree (body), Space Mono (coordinates/time).
  */
-export function useRallyFonts() {
+export function useFamilyChatsFonts() {
   return useFonts({
     BricolageGrotesque_700Bold,
     BricolageGrotesque_800ExtraBold,

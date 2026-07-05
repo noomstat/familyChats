@@ -20,7 +20,7 @@ export function YouScreen() {
         <View style={{ alignItems: 'center', gap: 10, paddingVertical: 20 }}>
           <Avatar name="You Now" size={88} ring />
           <Text style={{ fontFamily: fontFamily.display, fontSize: 24, color: semantic.textStrong }}>You</Text>
-          <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted }}>@you · RALLY-4KX</Text>
+          <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted }}>@you · FAM-4KX</Text>
         </View>
         <Card padding="none" style={{ overflow: 'hidden' }}>
           {ROWS.map(([ic, label, kind], i) => (
