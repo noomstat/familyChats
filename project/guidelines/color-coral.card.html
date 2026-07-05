@@ -1,0 +1,15 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Coral — brand / signal" subtitle="The action color: pins, primary buttons, sends" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;padding:20px;background:var(--surface-page);font-family:var(--font-body)}
+  .sw{display:flex;gap:8px}
+  .c{flex:1;height:76px;border-radius:var(--radius-md);display:flex;align-items:flex-end;padding:7px;box-sizing:border-box;font-family:var(--font-mono);font-size:10px;color:#fff}
+  .n{margin-top:6px;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);text-align:center}
+  .col{flex:1}
+</style></head><body>
+<div class="sw" id="s"></div>
+<script>
+  const steps=[["100","#FFE0D6","#6E2013"],["300","#FF9C80","#fff"],["500 ★","#FF5A3C","#fff"],["600","#ED4526","#fff"],["700","#C4331A","#fff"],["900","#6E2013","#fff"]];
+  document.getElementById("s").innerHTML=steps.map(([n,v,fg])=>`<div class="col"><div class="c" style="background:${v};color:${fg}">${v}</div><div class="n">coral ${n}</div></div>`).join("");
+</script>
+</body></html>

@@ -1,0 +1,15 @@
+<!-- @dsCard group="Brand" viewport="700x180" name="The pin motif" subtitle="Signature teardrop — people (coral) & places (sky)" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;padding:26px;background:var(--map-bg);position:relative;overflow:hidden}
+  .road{position:absolute;background:#fff}
+  .pin{position:absolute;width:46px;height:46px}
+  .drop{position:absolute;inset:0;border-radius:50% 50% 50% 0;transform:rotate(45deg);box-shadow:var(--shadow-pin);border:3px solid #fff}
+  .in{position:absolute;top:5px;left:5px;right:5px;bottom:5px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-display);font-weight:700;font-size:16px}
+</style></head><body>
+  <div class="road" style="left:0;top:52%;width:100%;height:9px"></div>
+  <div class="road" style="left:44%;top:0;width:9px;height:100%"></div>
+  <div class="pin" style="left:120px;top:40px"><div class="drop" style="background:var(--coral-500)"></div><div class="in" style="background:rgba(255,255,255,.2)">M</div></div>
+  <div class="pin" style="left:300px;top:70px"><div class="drop" style="background:var(--coral-500)"></div><div class="in" style="background:rgba(255,255,255,.2)">D</div></div>
+  <div class="pin" style="left:470px;top:44px"><div class="drop" style="background:var(--sky-500)"></div><div class="in" style="background:rgba(255,255,255,.2)">☕</div></div>
+</body></html>

@@ -1,0 +1,14 @@
+<!-- @dsCard group="Spacing" viewport="700x160" name="Radii" subtitle="Rally is round & friendly" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;padding:22px;background:var(--surface-page);font-family:var(--font-mono)}
+  #s{display:flex;gap:16px;align-items:flex-end}
+  .box{width:78px;height:64px;background:var(--surface-card);border:1.5px solid var(--coral-300);}
+  .n{font-size:9px;color:var(--text-muted);margin-top:6px;text-align:center}
+</style></head><body>
+<div id="s"></div>
+<script>
+  const t=[["xs","6px"],["sm","10px"],["md","14px"],["lg","20px"],["xl","28px"],["bubble","22px 22px 6px 22px"],["full","999px"]];
+  document.getElementById("s").innerHTML=t.map(([n,v])=>`<div><div class="box" style="border-radius:${v}"></div><div class="n">${n}</div></div>`).join("");
+</script>
+</body></html>

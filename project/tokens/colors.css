@@ -1,0 +1,110 @@
+/* Rally — Color tokens
+   Warm cartography palette: map-pin coral, live-ping green, warm ink + paper. */
+
+:root {
+  /* ---- Base scales ---- */
+
+  /* Coral — the "signal" / action color (map pin, primary buttons, sends) */
+  --coral-50:  #FFF1ED;
+  --coral-100: #FFE0D6;
+  --coral-200: #FFC2AF;
+  --coral-300: #FF9C80;
+  --coral-400: #FF7657;
+  --coral-500: #FF5A3C; /* brand primary */
+  --coral-600: #ED4526;
+  --coral-700: #C4331A;
+  --coral-800: #952717;
+  --coral-900: #6E2013;
+
+  /* Ping — live presence / location / online (fresh mint green) */
+  --ping-50:  #E6FBF2;
+  --ping-100: #C4F5E0;
+  --ping-200: #8DEBC4;
+  --ping-300: #4FDCA3;
+  --ping-400: #23C888;
+  --ping-500: #12B886; /* live location, "on the way" */
+  --ping-600: #0E9C72;
+  --ping-700: #0B7A5A;
+  --ping-800: #095E46;
+  --ping-900: #073F30;
+
+  /* Sky — map context, info, quiet links (kept secondary) */
+  --sky-50:  #EAF3FF;
+  --sky-100: #D3E6FF;
+  --sky-200: #A9CCFF;
+  --sky-300: #74A9FB;
+  --sky-400: #4B8BF5;
+  --sky-500: #2E72E8;
+  --sky-600: #1F59C4;
+
+  /* Warm ink neutrals (slightly toward brown, never pure gray) */
+  --ink-900: #1A1613; /* primary text */
+  --ink-800: #2C2621;
+  --ink-700: #443C34;
+  --ink-600: #5E544A;
+  --ink-500: #7B6F63;
+  --ink-400: #9C9184;
+  --ink-300: #C2B8AC;
+  --ink-200: #E1D9CF;
+  --ink-100: #EFE9E1;
+  --ink-50:  #F6F1EA;
+
+  /* Paper — warm off-white surfaces */
+  --paper:        #FAF6F1;
+  --paper-sunk:   #F2ECE4;
+  --white:        #FFFFFF;
+
+  /* Utility semantics */
+  --amber-500:  #F5A623; /* pending / away */
+  --amber-100:  #FDEFD4;
+  --rose-500:   #E23D5B; /* destructive / error */
+  --rose-100:   #FBE0E5;
+
+  /* ---- Semantic aliases (use these in components) ---- */
+  --brand:            var(--coral-500);
+  --brand-hover:      var(--coral-600);
+  --brand-press:      var(--coral-700);
+  --brand-soft:       var(--coral-50);
+  --brand-on:         var(--white);
+
+  --live:             var(--ping-500);
+  --live-soft:        var(--ping-50);
+  --live-on:          var(--white);
+
+  --info:             var(--sky-500);
+  --info-soft:        var(--sky-50);
+
+  --text-strong:      var(--ink-900);
+  --text-body:        var(--ink-700);
+  --text-muted:       var(--ink-500);
+  --text-faint:       var(--ink-400);
+  --text-on-brand:    var(--white);
+  --text-link:        var(--coral-600);
+
+  --surface-page:     var(--paper);
+  --surface-card:     var(--white);
+  --surface-sunk:     var(--paper-sunk);
+  --surface-inverse:  var(--ink-900);
+
+  --border-subtle:    var(--ink-100);
+  --border-default:   var(--ink-200);
+  --border-strong:    var(--ink-300);
+
+  --success:          var(--ping-500);
+  --success-soft:     var(--ping-50);
+  --warning:          var(--amber-500);
+  --warning-soft:     var(--amber-100);
+  --danger:           var(--rose-500);
+  --danger-soft:      var(--rose-100);
+
+  /* Chat bubble roles */
+  --bubble-me-bg:     var(--coral-500);
+  --bubble-me-text:   var(--white);
+  --bubble-them-bg:   var(--white);
+  --bubble-them-text: var(--ink-900);
+
+  /* Map surface (used behind location tiles) */
+  --map-bg:           #E8EEE6;
+  --map-road:         #FFFFFF;
+  --map-water:        #CFE0EC;
+}

@@ -1,0 +1,9 @@
+/* Rally — Webfonts
+   Substituted from Google Fonts (no brand font files were provided).
+   - Display : Bricolage Grotesque  (characterful modern grotesque — headings, brand)
+   - Body    : Figtree              (friendly geometric sans — UI + prose)
+   - Mono    : Space Mono           (GPS/coordinate flavor — timestamps, coords)
+   TODO(user): if Rally has licensed brand fonts, drop the woff2 files in
+   assets/fonts/ and replace this import with local @font-face rules. */
+
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Figtree:ital,wght@0,300..800;1,400..600&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');

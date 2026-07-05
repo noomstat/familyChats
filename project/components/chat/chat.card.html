@@ -1,0 +1,40 @@
+<!-- @dsCard group="Components" viewport="700x420" name="Chat" subtitle="Message bubbles, conversation rows, presence" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body { margin: 0; padding: 22px; background: var(--surface-page); display: grid; grid-template-columns: 1fr 300px; gap: 22px; }
+  .thread { display: flex; flex-direction: column; gap: 10px; }
+  .list { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 6px; box-shadow: var(--shadow-sm); align-self: start; }
+</style>
+</head>
+<body>
+<div class="thread" id="thread"></div>
+<div class="list" id="list"></div>
+<script type="text/babel">
+  const { ChatBubble, ConversationRow, LocationTile } = window.RallyDesignSystem_84ab56;
+  ReactDOM.createRoot(document.getElementById("thread")).render(
+    <>
+      <ChatBubble author="Mara" time="14:32">on my way — 5 min out</ChatBubble>
+      <ChatBubble mine time="14:32">meet at the fountain?</ChatBubble>
+      <ChatBubble mine time="14:33" attachment={<LocationTile label="The Fountain" meta="0.4 mi · 6 min walk" height={96} />} />
+      <ChatBubble author="Dev" time="14:34">perfect, sharing mine</ChatBubble>
+    </>
+  );
+  ReactDOM.createRoot(document.getElementById("list")).render(
+    <>
+      <ConversationRow name="Trail Crew" preview="Mara: on my way, 5 min" time="14:32" unread={3} live members={6} active />
+      <ConversationRow name="Dev Kaur" preview="see you there" time="Mon" />
+      <ConversationRow name="Weekend Climb" preview="Sam shared a location" time="Sun" members={4} />
+    </>
+  );
+</script>
+</body>
+</html>

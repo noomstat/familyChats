@@ -1,0 +1,74 @@
+<!-- @dsCard group="Rally App" viewport="900x760" name="Rally — mobile app" subtitle="Chat list, thread, share-location, live map" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rally — App UI Kit</title>
+<link rel="stylesheet" href="../../styles.css" />
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: 60px; padding: 40px; background:
+    radial-gradient(1100px 600px at 20% -5%, var(--coral-50), transparent 60%),
+    radial-gradient(900px 600px at 100% 100%, var(--ping-50), transparent 55%),
+    var(--surface-page); flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+  const { Phone, ChatListScreen } = window.RallyApp;
+  const { ThreadScreen, MapScreen } = window.RallyApp2;
+  const { Icon, Avatar, Switch, Card } = window.RallyDesignSystem_84ab56;
+
+  function YouScreen({ tab, onTab }) {
+    const { BottomNav } = window.RallyApp;
+    const [live, setLive] = React.useState(true);
+    return (
+      <>
+        <div style={{ flex: 1, overflowY: "auto", padding: "8px 18px" }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "20px 0 24px" }}>
+            <Avatar name="You Now" size={88} ring />
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 24, color: "var(--text-strong)" }}>You</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-muted)" }}>@you · RALLY-4KX</div>
+          </div>
+          <Card padding="none" style={{ overflow: "hidden" }}>
+            {[["navigation","Share live by default","toggle"],["bell","Notifications","chev"],["users","Manage groups","chev"],["lock","Privacy & who can see me","chev"]].map(([ic,label,kind],i)=>(
+              <div key={label} style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", borderTop: i? "1px solid var(--border-subtle)": "none" }}>
+                <span style={{ display:"inline-flex", width:34, height:34, borderRadius:10, background:"var(--surface-sunk)", alignItems:"center", justifyContent:"center" }}><Icon name={ic} size={18} color="var(--text-body)" /></span>
+                <span style={{ flex:1, fontWeight:600, color:"var(--text-strong)", fontSize:15 }}>{label}</span>
+                {kind==="toggle" ? <Switch checked={live} onChange={setLive} tone="live" /> : <Icon name="chevron-right" size={18} color="var(--text-faint)" />}
+              </div>
+            ))}
+          </Card>
+        </div>
+        <BottomNav tab={tab} onTab={onTab} />
+      </>
+    );
+  }
+
+  function App() {
+    const [tab, setTab] = React.useState("chats");
+    const [group, setGroup] = React.useState(null);
+
+    let screen;
+    if (tab === "chats" && group) {
+      screen = <ThreadScreen group={group} onBack={() => setGroup(null)} onOpenMap={() => { setGroup(null); setTab("map"); }} />;
+    } else if (tab === "chats") {
+      screen = <ChatListScreen tab={tab} onTab={setTab} onOpen={g => setGroup(g)} />;
+    } else if (tab === "map") {
+      screen = <MapScreen tab={tab} onTab={setTab} />;
+    } else {
+      screen = <YouScreen tab={tab} onTab={setTab} />;
+    }
+    return <Phone>{screen}</Phone>;
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

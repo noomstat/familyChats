@@ -1,0 +1,72 @@
+<!-- @dsCard group="Components" viewport="700x560" name="Core primitives" subtitle="Buttons, inputs, avatars, chips, badges, switches" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body { margin: 0; padding: 22px; background: var(--surface-page); }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .lbl { font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); width: 100%; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+  const { Button, IconButton, Avatar, Badge, Chip, Input, Switch, Icon } = window.RallyDesignSystem_84ab56;
+  function Demo() {
+    const [on, setOn] = React.useState(true);
+    const [sel, setSel] = React.useState("Nearby");
+    return (
+      <div>
+        <div className="row"><span className="lbl">Buttons</span>
+          <Button variant="primary">Rally the group</Button>
+          <Button variant="live" leadingIcon={<Icon name="navigation" size={16} color="#fff" />}>Share location</Button>
+          <Button variant="secondary">Not now</Button>
+          <Button variant="ghost">Skip</Button>
+          <Button variant="danger">Leave</Button>
+        </div>
+        <div className="row"><span className="lbl">Sizes & icon buttons</span>
+          <Button size="sm">Small</Button>
+          <Button size="md">Medium</Button>
+          <Button size="lg">Large</Button>
+          <IconButton name="send" variant="primary" aria-label="send" />
+          <IconButton name="navigation" variant="live" aria-label="loc" />
+          <IconButton name="plus" variant="soft" aria-label="add" />
+          <IconButton name="search" variant="outline" aria-label="search" />
+        </div>
+        <div className="row"><span className="lbl">Avatars & presence</span>
+          <Avatar name="Mara Ito" presence="live" size={46} />
+          <Avatar name="Dev Kaur" presence="online" size={46} />
+          <Avatar name="Sam Ng" presence="away" size={46} />
+          <Avatar name="Jo Park" presence="offline" size={46} />
+          <Badge tone="brand">3</Badge>
+          <Badge tone="live">LIVE</Badge>
+          <Badge tone="neutral" size="sm">Draft</Badge>
+          <Badge tone="danger" dot />
+        </div>
+        <div className="row"><span className="lbl">Chips</span>
+          {["All","Nearby","Groups","Places"].map(c => (
+            <Chip key={c} selected={sel===c} onClick={()=>setSel(c)}>{c}</Chip>
+          ))}
+          <Chip tone="live" leading={<Icon name="map-pin" size={14} color="var(--ping-600)" />}>Live</Chip>
+          <Chip onRemove={()=>{}}>Mara</Chip>
+        </div>
+        <div className="row"><span className="lbl">Inputs & switch</span>
+          <div style={{width:260}}><Input placeholder="Search groups & places" leading={<Icon name="search" size={18} />} /></div>
+          <div style={{width:150}}><Input invalid placeholder="Join code" /></div>
+          <Switch checked={on} onChange={setOn} />
+          <Switch checked={on} onChange={setOn} tone="live" />
+        </div>
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo />);
+</script>
+</body>
+</html>

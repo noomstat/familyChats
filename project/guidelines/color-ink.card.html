@@ -1,0 +1,15 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Warm ink neutrals" subtitle="Text & borders — warm, never pure gray" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;padding:20px;background:var(--surface-page);font-family:var(--font-body)}
+  .sw{display:flex;gap:6px}
+  .c{flex:1;height:76px;border-radius:var(--radius-md);display:flex;align-items:flex-end;padding:6px;box-sizing:border-box;font-family:var(--font-mono);font-size:9px}
+  .n{margin-top:6px;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-align:center}
+  .col{flex:1}
+</style></head><body>
+<div class="sw" id="s"></div>
+<script>
+  const steps=[["900","#1A1613","#fff"],["700","#443C34","#fff"],["500","#7B6F63","#fff"],["300","#C2B8AC","#1A1613"],["200","#E1D9CF","#1A1613"],["100","#EFE9E1","#1A1613"],["50","#F6F1EA","#1A1613"]];
+  document.getElementById("s").innerHTML=steps.map(([n,v,fg])=>`<div class="col"><div class="c" style="background:${v};color:${fg}">${v}</div><div class="n">ink ${n}</div></div>`).join("");
+</script>
+</body></html>

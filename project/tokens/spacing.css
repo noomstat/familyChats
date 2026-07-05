@@ -1,0 +1,41 @@
+/* Rally — Spacing, radius, sizing tokens
+   Base unit: 4px. Rally leans on generous, friendly spacing. */
+
+:root {
+  --space-0:   0;
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-7:   32px;
+  --space-8:   40px;
+  --space-9:   48px;
+  --space-10:  64px;
+  --space-11:  80px;
+  --space-12:  96px;
+
+  /* Radii — Rally is round & friendly (chat bubbles, pins) */
+  --radius-xs:   6px;
+  --radius-sm:   10px;
+  --radius-md:   14px;
+  --radius-lg:   20px;
+  --radius-xl:   28px;
+  --radius-2xl:  36px;
+  --radius-full: 999px;
+
+  /* Chat bubble radius (one tucked corner set per side in components) */
+  --radius-bubble: 22px;
+  --radius-bubble-tuck: 6px;
+
+  /* Control heights */
+  --control-sm: 36px;
+  --control-md: 44px; /* min touch target */
+  --control-lg: 54px;
+
+  /* Layout */
+  --app-max:      1200px;
+  --app-gutter:   24px;
+  --sidebar-w:    320px;
+}

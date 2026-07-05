@@ -1,0 +1,14 @@
+<!-- @dsCard group="Spacing" viewport="700x150" name="Spacing scale" subtitle="4px base unit" -->
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;padding:22px;background:var(--surface-page);font-family:var(--font-mono);display:flex;gap:14px;align-items:flex-end}
+  .col{text-align:center}
+  .bar{background:var(--coral-300);border-radius:4px;width:26px}
+  .n{font-size:9px;color:var(--text-muted);margin-top:5px}
+</style></head><body>
+<div id="s" style="display:flex;gap:14px;align-items:flex-end"></div>
+<script>
+  const t=[["1",4],["2",8],["3",12],["4",16],["5",20],["6",24],["7",32],["8",40],["9",48],["10",64]];
+  document.getElementById("s").innerHTML=t.map(([n,px])=>`<div class="col"><div class="bar" style="height:${px}px"></div><div class="n">${n}<br>${px}</div></div>`).join("");
+</script>
+</body></html>
