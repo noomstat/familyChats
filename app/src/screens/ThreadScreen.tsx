@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -8,30 +8,37 @@ import { Avatar } from '../components/core/Avatar';
 import { PresenceDot } from '../components/chat';
 import { ChatBubble } from '../components/chat';
 import { LocationTile, LivePill } from '../components/location';
-import { INITIAL_MESSAGES, ThreadMessage } from '../data/familyChats';
+import { Message, useActions, useLive, useMessages } from '../store';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Thread'>;
 
 export function ThreadScreen({ route, navigation }: Props) {
   const { group } = route.params;
-  const [msgs, setMsgs] = useState<ThreadMessage[]>(INITIAL_MESSAGES);
+  const msgs = useMessages(group.id);
+  const live = useLive(group.id);
+  const sharing = !!live;
+  const actions = useActions();
   const [draft, setDraft] = useState('');
   const [sheet, setSheet] = useState(false);
-  const [sharing, setSharing] = useState(group.live);
-  const listRef = useRef<FlatList>(null);
+  const listRef = useRef<FlatList<Message>>(null);
+
+  // Opening a thread clears its unread badge.
+  useEffect(() => {
+    actions.markRead(group.id);
+  }, [group.id, actions]);
 
   const send = () => {
     if (!draft.trim()) return;
-    setMsgs((m) => [...m, { id: Date.now(), mine: true, text: draft.trim() }]);
+    actions.sendMessage(group.id, draft.trim());
     setDraft('');
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   };
 
   const confirmShare = (dur: string) => {
-    setSharing(true);
     setSheet(false);
-    setMsgs((m) => [...m, { id: Date.now(), mine: true, live: true, loc: { label: 'Your live location', meta: 'Sharing · ' + dur } }]);
+    actions.startLive(group.id, dur === 'until stopped' ? 'Sharing until stopped' : dur + ' left');
+    actions.sendLocation(group.id, 'Your live location', 'Sharing · ' + dur, true);
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   };
 
@@ -60,8 +67,8 @@ export function ThreadScreen({ route, navigation }: Props) {
 
       {sharing && (
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: semantic.liveSoft, borderBottomWidth: 1, borderBottomColor: colors.ping200 }}>
-          <LivePill timeLeft="58 min left" compact />
-          <Pressable onPress={() => setSharing(false)}>
+          <LivePill timeLeft={live?.expiresLabel ?? 'Sharing'} compact />
+          <Pressable onPress={() => actions.stopLive(group.id)}>
             <Text style={{ color: colors.ping700, fontFamily: fontFamily.bodySemibold, fontSize: 13 }}>Stop</Text>
           </Pressable>
         </View>
@@ -103,7 +110,7 @@ export function ThreadScreen({ route, navigation }: Props) {
   );
 }
 
-function ChatMsg({ m }: { m: ThreadMessage }) {
+function ChatMsg({ m }: { m: Message }) {
   const attachment = m.loc ? (
     <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
   ) : undefined;

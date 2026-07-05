@@ -6,7 +6,7 @@ import { semantic, fontFamily, fontSize, space } from '../theme';
 import { Icon, IconButton, Input, Chip } from '../components/core';
 import { ConversationRow } from '../components/chat';
 import { PinMark } from '../components/brand/PinMark';
-import { GROUPS, Group } from '../data/familyChats';
+import { useChatRows, ChatRow } from '../store';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'ChatList'>;
@@ -17,7 +17,7 @@ export function ChatListScreen({ navigation }: Props) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('All');
 
-  let rows: Group[] = GROUPS;
+  let rows: ChatRow[] = useChatRows();
   if (filter === 'Live now') rows = rows.filter((g) => g.live);
   if (filter === 'Groups') rows = rows.filter((g) => g.members);
   if (filter === 'Unread') rows = rows.filter((g) => g.unread);

@@ -7,6 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { useFamilyChatsFonts } from './src/theme';
 import { semantic } from './src/theme';
+import { AppStoreProvider } from './src/store';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -25,12 +26,14 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: semantic.surfacePage }} onLayout={onLayout}>
-        <StatusBar style="dark" />
-        <NavigationContainer>
-          <RootNavigator />
-        </NavigationContainer>
-      </View>
+      <AppStoreProvider>
+        <View style={{ flex: 1, backgroundColor: semantic.surfacePage }} onLayout={onLayout}>
+          <StatusBar style="dark" />
+          <NavigationContainer>
+            <RootNavigator />
+          </NavigationContainer>
+        </View>
+      </AppStoreProvider>
     </SafeAreaProvider>
   );
 }

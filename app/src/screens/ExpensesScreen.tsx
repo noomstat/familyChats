@@ -3,9 +3,20 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
-import { Button, Icon, IconButton, Badge } from '../components/core';
+import { Button, Icon, IconButton, Input, Chip, Badge } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { CATEGORIES, INCOME, PEOPLE, RECEIPT, TOTAL, YOU, money } from '../data/familyChats';
+import {
+  CATEGORIES,
+  CategoryId,
+  CategoryTotal,
+  CURRENT_USER,
+  LedgerSummary,
+  PersonBalance,
+  RECEIPT,
+  money,
+  useActions,
+  useLedger,
+} from '../store';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Expenses'>;
@@ -14,9 +25,13 @@ type ViewMode = 'category' | 'people';
 
 export function ExpensesScreen({ route, navigation }: Props) {
   const { group } = route.params;
+  const summary = useLedger(group.id);
+  const actions = useActions();
   const [view, setView] = useState<ViewMode>('category');
   const [receipt, setReceipt] = useState(false);
-  const net = YOU.paid - YOU.share; // +owed / -owes
+  const [adding, setAdding] = useState(false);
+  const net = summary.you.net; // +owed / -owes
+  const owed = net >= 0;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top']}>
@@ -33,27 +48,29 @@ export function ExpensesScreen({ route, navigation }: Props) {
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 20 }}>
         {/* balance hero */}
         <View style={{ backgroundColor: colors.ink900, borderRadius: radius.xl, padding: 20, paddingVertical: 18 }}>
-          <Text style={{ fontFamily: fontFamily.mono, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', color: colors.ping300 }}>
-            You're owed
+          <Text style={{ fontFamily: fontFamily.mono, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', color: owed ? colors.ping300 : colors.coral300 }}>
+            {owed ? "You're owed" : 'You owe'}
           </Text>
           <Text style={{ fontFamily: fontFamily.display, fontSize: 42, letterSpacing: -0.8, color: colors.white, marginTop: 2, marginBottom: 12 }}>
-            {money(net)}
+            {money(Math.abs(net))}
           </Text>
           <View style={{ flexDirection: 'row', gap: 10 }}>
-            <MiniStat label="You paid" value={money(YOU.paid)} tone={colors.white} />
-            <MiniStat label="Your share" value={money(YOU.share)} tone={colors.ink200} />
+            <MiniStat label="You paid" value={money(summary.you.paid)} tone={colors.white} />
+            <MiniStat label="Your share" value={money(summary.you.share)} tone={colors.ink200} />
           </View>
         </View>
 
         {/* income / expense strip */}
         <View style={{ flexDirection: 'row', gap: 10, marginVertical: 14 }}>
-          <TotalCard icon="arrow-down-left" label="Expenses" value={money(TOTAL)} color={colors.coral600} bg={semantic.brandSoft} />
-          <TotalCard icon="arrow-up-right" label="Income" value={money(INCOME.amount)} color={colors.ping700} bg={semantic.liveSoft} />
+          <TotalCard icon="arrow-down-left" label="Expenses" value={money(summary.expenseTotal)} color={colors.coral600} bg={semantic.brandSoft} />
+          <TotalCard icon="arrow-up-right" label="Income" value={money(summary.incomeTotal)} color={colors.ping700} bg={semantic.liveSoft} />
         </View>
 
         <Segmented value={view} onChange={setView} options={[['category', 'By category'], ['people', 'By people']]} />
 
-        <View style={{ marginTop: 14 }}>{view === 'category' ? <ByCategory /> : <ByPeople />}</View>
+        <View style={{ marginTop: 14 }}>
+          {view === 'category' ? <ByCategory summary={summary} /> : <ByPeople summary={summary} onSettle={(name) => actions.settle(group.id, name)} />}
+        </View>
       </ScrollView>
 
       {/* actions */}
@@ -62,13 +79,14 @@ export function ExpensesScreen({ route, navigation }: Props) {
           Receipt
         </Button>
         <View style={{ flex: 1 }}>
-          <Button block leadingIcon={<Icon name="plus" size={18} color={colors.white} />}>
+          <Button block leadingIcon={<Icon name="plus" size={18} color={colors.white} />} onPress={() => setAdding(true)}>
             Add expense
           </Button>
         </View>
       </View>
 
       {receipt && <ReceiptSheet groupName={group.name} onClose={() => setReceipt(false)} />}
+      {adding && <AddExpenseSheet groupId={group.id} roster={group.roster} onClose={() => setAdding(false)} />}
     </SafeAreaView>
   );
 }
@@ -129,11 +147,15 @@ function Segmented({
   );
 }
 
-function ByCategory() {
-  const max = Math.max(...CATEGORIES.map((c) => c.amount));
+function ByCategory({ summary }: { summary: LedgerSummary }) {
+  const cats = summary.spendByCategory;
+  const max = Math.max(1, ...cats.map((c) => c.amount));
   return (
     <View style={{ gap: 6 }}>
-      {CATEGORIES.map((c) => (
+      {cats.length === 0 && (
+        <Text style={{ textAlign: 'center', color: semantic.textFaint, paddingVertical: 24, fontSize: fontSize.bodySm }}>No expenses yet — add the first one.</Text>
+      )}
+      {cats.map((c: CategoryTotal) => (
         <View key={c.id} style={{ paddingVertical: 10, paddingHorizontal: 4 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <View style={{ width: 38, height: 38, borderRadius: radius.full, backgroundColor: semantic.surfaceSunk, alignItems: 'center', justifyContent: 'center' }}>
@@ -152,23 +174,24 @@ function ByCategory() {
         </View>
       ))}
       {/* income row */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4, marginTop: 4, borderTopWidth: 1, borderTopColor: semantic.borderDefault, borderStyle: 'dashed' }}>
-        <View style={{ width: 38, height: 38, borderRadius: radius.full, backgroundColor: semantic.liveSoft, alignItems: 'center', justifyContent: 'center' }}>
-          <Icon name={INCOME.icon} size={19} color={colors.ping600} />
+      {summary.incomeTotal > 0 && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4, marginTop: 4, borderTopWidth: 1, borderTopColor: semantic.borderDefault, borderStyle: 'dashed' }}>
+          <View style={{ width: 38, height: 38, borderRadius: radius.full, backgroundColor: semantic.liveSoft, alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name={summary.income.icon} size={19} color={colors.ping600} />
+          </View>
+          <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{summary.income.label}</Text>
+          <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 15, color: colors.ping700 }}>+{money(summary.income.amount)}</Text>
         </View>
-        <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{INCOME.label}</Text>
-        <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 15, color: colors.ping700 }}>+{money(INCOME.amount)}</Text>
-      </View>
+      )}
     </View>
   );
 }
 
-function ByPeople() {
+function ByPeople({ summary, onSettle }: { summary: LedgerSummary; onSettle: (name: string) => void }) {
   return (
     <View style={{ gap: 8 }}>
-      {PEOPLE.map((p) => {
-        const net = p.paid - p.share;
-        const isYou = p.name === 'You Now';
+      {summary.people.map((p: PersonBalance) => {
+        const isYou = p.name === CURRENT_USER;
         return (
           <View key={p.name} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4 }}>
             <Avatar name={p.name} size={42} presence={isYou ? null : 'online'} ring={isYou} />
@@ -179,20 +202,135 @@ function ByPeople() {
               </Text>
             </View>
             <View style={{ alignItems: 'flex-end', gap: 4 }}>
-              <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 15, color: net >= 0 ? colors.ping700 : colors.coral600 }}>
-                {net >= 0 ? '+' : ''}
-                {money(net)}
+              <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 15, color: p.net >= 0 ? colors.ping700 : colors.coral600 }}>
+                {p.net >= 0 ? '+' : ''}
+                {money(p.net)}
               </Text>
-              <Text style={{ fontSize: 11, color: semantic.textFaint }}>{net > 0 ? 'owed' : net < 0 ? 'owes' : 'settled'}</Text>
+              <Text style={{ fontSize: 11, color: semantic.textFaint }}>{p.net > 0 ? 'owed' : p.net < 0 ? 'owes' : 'settled'}</Text>
             </View>
-            {net < 0 && (
-              <Button size="sm" variant="live">
+            {!isYou && p.net < 0 && (
+              <Button size="sm" variant="live" onPress={() => onSettle(p.name)}>
                 Settle
               </Button>
             )}
           </View>
         );
       })}
+    </View>
+  );
+}
+
+// ── Add-expense form ─────────────────────────────────────────
+
+function AddExpenseSheet({ groupId, roster, onClose }: { groupId: string; roster: string[]; onClose: () => void }) {
+  const actions = useActions();
+  const [label, setLabel] = useState('');
+  const [amountStr, setAmountStr] = useState('');
+  const [categoryId, setCategoryId] = useState<CategoryId>('food');
+  const [paidBy, setPaidBy] = useState(CURRENT_USER);
+  const [split, setSplit] = useState<string[]>(roster);
+
+  const amount = parseFloat(amountStr.replace(',', '.'));
+  const valid = label.trim().length > 0 && amount > 0 && split.length > 0;
+
+  const toggleSplit = (name: string) =>
+    setSplit((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
+
+  const submit = () => {
+    if (!valid) return;
+    actions.addExpense({ groupId, label: label.trim(), categoryId, amount: Math.round(amount * 100) / 100, paidBy, splitAmong: split });
+    onClose();
+  };
+
+  return (
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}>
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <ScrollView
+        style={{ maxHeight: '92%' }}
+        contentContainerStyle={{
+          backgroundColor: semantic.surfaceCard,
+          borderTopLeftRadius: 28,
+          borderTopRightRadius: 28,
+          paddingHorizontal: 20,
+          paddingTop: 10,
+          paddingBottom: 28,
+          gap: 16,
+          ...shadow.xl,
+        }}
+      >
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
+        <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Add expense</Text>
+
+        <Field label="What was it for?">
+          <Input value={label} onChangeText={setLabel} placeholder="e.g. Groceries" />
+        </Field>
+
+        <Field label="Amount (THB)">
+          <Input value={amountStr} onChangeText={setAmountStr} placeholder="0.00" keyboardType="decimal-pad" leading={<Text style={{ fontFamily: fontFamily.monoBold, color: semantic.textMuted, fontSize: 15 }}>฿</Text>} />
+        </Field>
+
+        <Field label="Category">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {CATEGORIES.map((c) => (
+              <Chip
+                key={c.id}
+                selected={categoryId === c.id}
+                tone={c.income ? 'live' : 'neutral'}
+                onPress={() => setCategoryId(c.id)}
+                leading={<Icon name={c.icon} size={15} color={categoryId === c.id ? colors.white : c.color} />}
+              >
+                {c.label}
+              </Chip>
+            ))}
+          </View>
+        </Field>
+
+        <Field label="Paid by">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {roster.map((name) => (
+              <Chip key={name} selected={paidBy === name} onPress={() => setPaidBy(name)}>
+                {name === CURRENT_USER ? 'You' : name}
+              </Chip>
+            ))}
+          </View>
+        </Field>
+
+        <Field label={`Split among (${split.length})`}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {roster.map((name) => {
+              const on = split.includes(name);
+              return (
+                <Chip
+                  key={name}
+                  selected={on}
+                  onPress={() => toggleSplit(name)}
+                  leading={on ? <Icon name="check-circle-2" size={15} color={colors.white} /> : undefined}
+                >
+                  {name === CURRENT_USER ? 'You' : name}
+                </Chip>
+              );
+            })}
+          </View>
+          {amount > 0 && split.length > 0 && (
+            <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted, marginTop: 8 }}>
+              {money(Math.round((amount / split.length) * 100) / 100)} each
+            </Text>
+          )}
+        </Field>
+
+        <Button block size="lg" disabled={!valid} onPress={submit} leadingIcon={<Icon name="plus" size={18} color={colors.white} />}>
+          Add {amount > 0 ? money(Math.round(amount * 100) / 100) : 'expense'}
+        </Button>
+      </ScrollView>
+    </View>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>{label}</Text>
+      {children}
     </View>
   );
 }
