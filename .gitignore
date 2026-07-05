@@ -1,3 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+out/
+.expo/
+.expo-webcheck/
+web-build/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Design import artifact (one-time bundle)
 familychats.bundle
