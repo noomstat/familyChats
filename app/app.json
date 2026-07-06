@@ -8,9 +8,11 @@
     "userInterfaceStyle": "light",
     "backgroundColor": "#FAF6F1",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.noomstat.familychats"
     },
     "android": {
+      "package": "com.noomstat.familychats",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -21,6 +23,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c3b0dafd-6820-4545-968b-7b249cd034ec"
+      }
+    },
+    "owner": "noomstat"
   }
 }
