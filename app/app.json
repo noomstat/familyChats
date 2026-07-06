@@ -29,6 +29,9 @@
         "projectId": "c3b0dafd-6820-4545-968b-7b249cd034ec"
       }
     },
-    "owner": "noomstat"
+    "owner": "noomstat",
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

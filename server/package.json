@@ -4,16 +4,20 @@
   "private": true,
   "type": "module",
   "description": "FamilyChats backend — API + a separate push-notification worker (Postgres + pg-boss).",
-  "engines": { "node": ">=20.6" },
+  "engines": {
+    "node": ">=20.6"
+  },
   "scripts": {
     "migrate": "node --env-file=.env migrate.js",
     "start": "node --env-file=.env server.js",
     "worker": "node --env-file=.env worker.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "expo-server-sdk": "^3.15.0",
     "express": "^5.1.0",
     "pg": "^8.13.1",
-    "pg-boss": "^10.1.5"
+    "pg-boss": "^10.1.5",
+    "ws": "^8.21.0"
   }
 }

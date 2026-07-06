@@ -18,10 +18,41 @@ import {
   Transfer,
   summarize,
 } from './model';
+import { tokenStorage } from './tokenStorage';
+import {
+  FamilyInfo,
+  FamilyMember,
+  authLogin,
+  authLogout,
+  authRegister,
+  createFamily as apiCreateFamily,
+  getMe,
+  joinFamily as apiJoinFamily,
+} from '../api/client';
 
 const STORAGE_KEY = 'familychats:store:v1';
 
 // ── State ────────────────────────────────────────────────────
+
+/** The signed-in user's session — the opaque token lives in tokenStorage, not here. */
+export interface Session {
+  token: string;
+  userId: string;
+  username: string;
+  name: string;
+}
+
+export interface FamilyState {
+  id: string;
+  name: string;
+  inviteCode: string;
+  role: 'owner' | 'member';
+  members: FamilyMember[];
+}
+
+function toFamilyState(info: FamilyInfo): FamilyState {
+  return { id: info.family.id, name: info.family.name, inviteCode: info.family.inviteCode, role: info.family.role, members: info.members };
+}
 
 export interface AppState {
   messages: Record<string, Message[]>;
@@ -31,10 +62,18 @@ export interface AppState {
   transfers: Transfer[];
   /** True once we've attempted to load persisted state. */
   hydrated: boolean;
+  /** The signed-in user, or null when logged out. Not persisted to AsyncStorage —
+   * rehydrated each launch from the secure-store token via GET /me. */
+  session: Session | null;
+  /** The session user's Family Space, or null until they create/join one. */
+  family: FamilyState | null;
+  /** True once the initial secure-store token check (and /me call) has settled. */
+  sessionReady: boolean;
 }
 
-/** The persisted slice — everything except the transient `hydrated` flag. */
-type Persisted = Omit<AppState, 'hydrated'>;
+/** The persisted slice — local demo data only. Session/family are re-fetched
+ * from the server each launch (via the secure-store token), never cached here. */
+type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'sessionReady'>;
 
 const seedState: AppState = {
   messages: SEED_MESSAGES,
@@ -43,6 +82,9 @@ const seedState: AppState = {
   expenses: SEED_EXPENSES,
   transfers: SEED_TRANSFERS,
   hydrated: false,
+  session: null,
+  family: null,
+  sessionReady: false,
 };
 
 // ── Actions ──────────────────────────────────────────────────
@@ -55,7 +97,11 @@ type Action =
   | { type: 'STOP_LIVE'; groupId: string }
   | { type: 'MARK_READ'; groupId: string }
   | { type: 'ADD_EXPENSE'; expense: Omit<Expense, 'id' | 'ts'> }
-  | { type: 'SETTLE'; groupId: string; person: string };
+  | { type: 'SETTLE'; groupId: string; person: string }
+  | { type: 'SET_SESSION'; session: Session | null }
+  | { type: 'SET_FAMILY'; family: FamilyState | null }
+  | { type: 'SESSION_READY' }
+  | { type: 'LOGOUT' };
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
@@ -66,7 +112,12 @@ function push(map: Record<string, Message[]>, groupId: string, msg: Message): Re
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'HYDRATE':
-      return { ...(action.payload ? { ...seedState, ...action.payload } : state), hydrated: true };
+      // Merge the persisted demo-data slice only — session/family are never
+      // part of this blob (see Persisted), so this can't clobber a session
+      // already established by the token-check effect, whichever runs first.
+      return action.payload
+        ? { ...seedState, ...action.payload, session: state.session, family: state.family, sessionReady: state.sessionReady, hydrated: true }
+        : { ...state, hydrated: true };
 
     case 'SEND_MESSAGE': {
       const msg: Message = { id: uid(), mine: true, text: action.text, ts: Date.now() };
@@ -106,6 +157,19 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, transfers: [...state.transfers, transfer] };
     }
 
+    case 'SET_SESSION':
+      return { ...state, session: action.session };
+
+    case 'SET_FAMILY':
+      return { ...state, family: action.family };
+
+    case 'SESSION_READY':
+      return state.sessionReady ? state : { ...state, sessionReady: true };
+
+    case 'LOGOUT':
+      // Clears session+family only — local demo data (messages, expenses, …) stays put.
+      return { ...state, session: null, family: null };
+
     default:
       return state;
   }
@@ -137,12 +201,37 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Persist on every change once hydrated.
+  // Persist on every change once hydrated. Session/family are deliberately
+  // excluded — they're re-derived from the secure-store token (below), never
+  // cached in this AsyncStorage blob.
   useEffect(() => {
     if (!state.hydrated) return;
-    const { hydrated: _omit, ...persisted } = state;
+    const { hydrated: _hydrated, session: _session, family: _family, sessionReady: _sessionReady, ...persisted } = state;
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(persisted)).catch(() => {});
   }, [state]);
+
+  // Load the session token once on mount and, if present, hydrate session+family
+  // from the server. A missing/expired/invalid token is a silent fail → logged out.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await tokenStorage.get();
+        if (!token || cancelled) return;
+        const { user, family } = await getMe(token);
+        if (cancelled) return;
+        dispatch({ type: 'SET_SESSION', session: { token, userId: user.id, username: user.username, name: user.name } });
+        dispatch({ type: 'SET_FAMILY', family: family ? toFamilyState(family) : null });
+      } catch {
+        if (!cancelled) await tokenStorage.clear().catch(() => {});
+      } finally {
+        if (!cancelled) dispatch({ type: 'SESSION_READY' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const value = useMemo(() => ({ state, dispatch }), [state]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -158,7 +247,9 @@ function useCtx(): AppContextValue {
 
 /** Bound action creators — the write API for screens. */
 export function useActions() {
-  const { dispatch } = useCtx();
+  const { state, dispatch } = useCtx();
+  const token = state.session?.token;
+
   return useMemo(
     () => ({
       sendMessage: (groupId: string, text: string) => dispatch({ type: 'SEND_MESSAGE', groupId, text }),
@@ -169,8 +260,53 @@ export function useActions() {
       markRead: (groupId: string) => dispatch({ type: 'MARK_READ', groupId }),
       addExpense: (expense: Omit<Expense, 'id' | 'ts'>) => dispatch({ type: 'ADD_EXPENSE', expense }),
       settle: (groupId: string, person: string) => dispatch({ type: 'SETTLE', groupId, person }),
+
+      /** Log in an existing user, persist the token, and hydrate family state. */
+      login: async (username: string, password: string) => {
+        const { token: newToken, user } = await authLogin({ username, password });
+        await tokenStorage.set(newToken);
+        dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name } });
+        try {
+          const me = await getMe(newToken);
+          dispatch({ type: 'SET_FAMILY', family: me.family ? toFamilyState(me.family) : null });
+        } catch {
+          dispatch({ type: 'SET_FAMILY', family: null });
+        }
+      },
+
+      /** Register a new user, then log them in immediately (register has no session of its own). */
+      register: async (username: string, password: string, name: string) => {
+        await authRegister({ username, password, name });
+        const { token: newToken, user } = await authLogin({ username, password });
+        await tokenStorage.set(newToken);
+        dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name } });
+        dispatch({ type: 'SET_FAMILY', family: null }); // brand-new account: never in a family yet
+      },
+
+      /** Log out: best-effort server-side session revoke, then always clear local state. */
+      logout: async () => {
+        try {
+          if (token) await authLogout(token);
+        } catch {
+          // Non-fatal — the token may already be expired/gone server-side.
+        }
+        await tokenStorage.clear().catch(() => {});
+        dispatch({ type: 'LOGOUT' });
+      },
+
+      createFamily: async (name: string) => {
+        if (!token) throw new Error('not signed in');
+        const info = await apiCreateFamily(token, name);
+        dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
+      },
+
+      joinFamily: async (code: string) => {
+        if (!token) throw new Error('not signed in');
+        const info = await apiJoinFamily(token, code);
+        dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
+      },
     }),
-    [dispatch],
+    [dispatch, token],
   );
 }
 
@@ -227,4 +363,20 @@ export function useLedger(groupId: string): LedgerSummary {
 
 export function useHydrated(): boolean {
   return useCtx().state.hydrated;
+}
+
+/** The signed-in user, or null when logged out. */
+export function useSession(): Session | null {
+  return useCtx().state.session;
+}
+
+/** The session user's Family Space, or null until they create/join one. */
+export function useFamily(): FamilyState | null {
+  return useCtx().state.family;
+}
+
+/** True once the initial secure-store token check (and /me call) has settled —
+ * use this to avoid flashing the login screen while that check is in flight. */
+export function useSessionReady(): boolean {
+  return useCtx().state.sessionReady;
 }

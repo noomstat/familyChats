@@ -30,6 +30,7 @@ import {
   Map,
   User,
   Lock,
+  LogOut,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -68,6 +69,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   map: Map,
   user: User,
   lock: Lock,
+  'log-out': LogOut,
 };
 
 export type IconName = keyof typeof REGISTRY;

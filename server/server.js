@@ -1,30 +1,110 @@
-// API process (`npm start`). Registers device tokens and enqueues notifications.
-// It does NOT send pushes — that's the worker's job. Enqueue only.
+// API process (`npm start`). Auth, Family Space, device tokens, and the WS hub.
+// Does NOT send pushes itself — notifyUsers() only enqueues; the worker sends.
 import express from 'express';
 import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
 import { pool } from './src/db.js';
+import { register, login, logout, requireAuth } from './src/auth.js';
+import { createFamily, joinFamily, getFamilyForUser, regenerateCode } from './src/family.js';
+import { attachWebSocketServer } from './src/ws.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
 const app = express();
 app.use(express.json());
 
-// TODO: replace the `userId` in these bodies with the authenticated user from
-// your session/JWT middleware — never trust a client-supplied user id.
+// ── Auth ─────────────────────────────────────────────────────
 
-app.post('/devices', async (req, res, next) => {
+app.post('/auth/register', async (req, res, next) => {
   try {
-    const { userId, expoToken, platform } = req.body ?? {};
-    if (!userId || !expoToken || !platform) return res.status(400).json({ error: 'userId, expoToken, platform required' });
-    await registerToken({ userId, expoToken, platform });
+    const user = await register(req.body ?? {});
+    res.status(201).json({ user });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/auth/login', async (req, res, next) => {
+  try {
+    const { token, user } = await login(req.body ?? {});
+    res.json({ token, user });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/auth/logout', async (req, res, next) => {
+  try {
+    const header = req.get('authorization') ?? '';
+    const [, token] = header.split(' ');
+    await logout(token);
     res.status(204).end();
   } catch (err) {
     next(err);
   }
 });
 
-app.delete('/devices/:token', async (req, res, next) => {
+// ── Authed routes ────────────────────────────────────────────
+
+app.get('/me', requireAuth, async (req, res, next) => {
+  try {
+    const found = await getFamilyForUser(req.user.id);
+    res.json({ user: req.user, family: found });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/families', requireAuth, async (req, res, next) => {
+  try {
+    const found = await createFamily({ name: req.body?.name, userId: req.user.id });
+    res.status(201).json(found);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/families/join', requireAuth, async (req, res, next) => {
+  try {
+    const found = await joinFamily({ code: req.body?.code, userId: req.user.id });
+    res.json(found);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/families/regenerate-code', requireAuth, async (req, res, next) => {
+  try {
+    const found = await getFamilyForUser(req.user.id);
+    if (!found) return res.status(404).json({ error: 'not in a family' });
+    const updated = await regenerateCode({ familyId: found.family.id, userId: req.user.id });
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/families/members', requireAuth, async (req, res, next) => {
+  try {
+    const found = await getFamilyForUser(req.user.id);
+    res.json({ members: found?.members ?? [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/devices', requireAuth, async (req, res, next) => {
+  try {
+    const { expoToken, platform } = req.body ?? {};
+    if (!expoToken || !platform) return res.status(400).json({ error: 'expoToken, platform required' });
+    await registerToken({ userId: req.user.id, expoToken, platform });
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/devices/:token', requireAuth, async (req, res, next) => {
   try {
     await removeToken(req.params.token);
     res.status(204).end();
@@ -54,6 +134,7 @@ app.use((err, _req, res, _next) => {
 
 const port = Number(process.env.PORT) || 3002;
 const httpServer = app.listen(port, () => console.log(`[api] listening on :${port}`));
+attachWebSocketServer(httpServer);
 
 async function shutdown(signal) {
   console.log(`[api] ${signal} — shutting down`);

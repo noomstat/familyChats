@@ -8,7 +8,8 @@ import * as Notifications from 'expo-notifications';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { useFamilyChatsFonts } from './src/theme';
 import { semantic } from './src/theme';
-import { AppStoreProvider, CURRENT_USER } from './src/store';
+import { AppStoreProvider, useFamily, useSession, useSessionReady } from './src/store';
+import { LoginScreen, FamilyGateScreen } from './src/screens';
 import { usePushRegistration } from './src/notifications/registerPushToken';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -23,9 +24,20 @@ Notifications.setNotificationHandler({
   }),
 });
 
+/** Session → Family Space → main tabs gate. Rendered once fonts (and the
+ * initial secure-store token check) have settled. */
+function Gate() {
+  const session = useSession();
+  const family = useFamily();
+  usePushRegistration(session?.token);
+
+  if (!session) return <LoginScreen />;
+  if (!family) return <FamilyGateScreen />;
+  return <RootNavigator />;
+}
+
 export default function App() {
   const [fontsLoaded, fontError] = useFamilyChatsFonts();
-  usePushRegistration(CURRENT_USER);
 
   const onLayout = useCallback(async () => {
     if (fontsLoaded || fontError) {
@@ -43,10 +55,18 @@ export default function App() {
         <View style={{ flex: 1, backgroundColor: semantic.surfacePage }} onLayout={onLayout}>
           <StatusBar style="dark" />
           <NavigationContainer>
-            <RootNavigator />
+            <SessionGate />
           </NavigationContainer>
         </View>
       </AppStoreProvider>
     </SafeAreaProvider>
   );
+}
+
+/** Holds the splash screen up (renders nothing) until the secure-store token
+ * check has resolved, so signed-in users never flash the login screen. */
+function SessionGate() {
+  const ready = useSessionReady();
+  if (!ready) return null;
+  return <Gate />;
 }
