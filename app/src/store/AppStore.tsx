@@ -3,31 +3,36 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   CURRENT_USER,
   Expense,
-  Group,
-  GROUPS,
   LedgerSummary,
   LiveShare,
   Message,
-  previewOf,
   SEED_EXPENSES,
-  SEED_LIVE,
-  SEED_MESSAGES,
   SEED_TRANSFERS,
-  SEED_UNREAD,
   timeLabel,
   Transfer,
   summarize,
 } from './model';
 import { tokenStorage } from './tokenStorage';
 import {
+  BootstrapResponse,
   FamilyInfo,
   FamilyMember,
+  ServerGroup,
+  ServerMessage,
   authLogin,
   authLogout,
   authRegister,
+  addGroupMember,
   createFamily as apiCreateFamily,
+  createGroup as apiCreateGroup,
+  getBootstrap,
+  getGroupMessages,
   getMe,
   joinFamily as apiJoinFamily,
+  postMessage,
+  postRead,
+  removeGroupMember,
+  renameGroup as apiRenameGroup,
 } from '../api/client';
 
 const STORAGE_KEY = 'familychats:store:v1';
@@ -54,9 +59,25 @@ function toFamilyState(info: FamilyInfo): FamilyState {
   return { id: info.family.id, name: info.family.name, inviteCode: info.family.inviteCode, role: info.family.role, members: info.members };
 }
 
+/** A server-backed chat group (dynamic — created/renamed/joined at runtime). */
+export interface ChatGroup {
+  id: string;
+  familyId: string;
+  name: string;
+  /** User ids. */
+  members: string[];
+}
+
 export interface AppState {
-  messages: Record<string, Message[]>;
+  groups: Record<string, ChatGroup>;
+  messages: Record<string, Message[]>; // ascending by ts
+  /** groupId -> userId -> last-read ts (ms) */
+  readCursors: Record<string, Record<string, number>>;
   unread: Record<string, number>;
+  /** Whether there's older history left to page in via loadEarlier(). */
+  hasMore: Record<string, boolean>;
+  /** ISO timestamp of the last successful bootstrap/sync — drives WS-reconnect catch-up. */
+  lastSync: string | null;
   live: Record<string, LiveShare | undefined>;
   expenses: Expense[];
   transfers: Transfer[];
@@ -71,14 +92,18 @@ export interface AppState {
   sessionReady: boolean;
 }
 
-/** The persisted slice — local demo data only. Session/family are re-fetched
- * from the server each launch (via the secure-store token), never cached here. */
+/** The persisted slice — local/offline-read demo + chat cache. Session/family
+ * are re-fetched from the server each launch, never cached here. */
 type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'sessionReady'>;
 
 const seedState: AppState = {
-  messages: SEED_MESSAGES,
-  unread: SEED_UNREAD,
-  live: SEED_LIVE,
+  groups: {},
+  messages: {},
+  readCursors: {},
+  unread: {},
+  hasMore: {},
+  lastSync: null,
+  live: {},
   expenses: SEED_EXPENSES,
   transfers: SEED_TRANSFERS,
   hydrated: false,
@@ -87,15 +112,39 @@ const seedState: AppState = {
   sessionReady: false,
 };
 
+// ── Server <-> store message mapping ─────────────────────────
+
+export function fromServerMessage(sm: ServerMessage): Message {
+  return {
+    id: sm.id,
+    groupId: sm.groupId,
+    authorId: sm.authorId,
+    kind: sm.kind,
+    text: sm.body ?? undefined,
+    loc: sm.loc ? { label: sm.loc.label, meta: sm.loc.meta } : undefined,
+    live: sm.loc?.live,
+    ts: Date.parse(sm.ts),
+  };
+}
+
+function toChatGroup(g: ServerGroup): ChatGroup {
+  return { id: g.id, familyId: g.familyId, name: g.name, members: g.members };
+}
+
 // ── Actions ──────────────────────────────────────────────────
 
 type Action =
   | { type: 'HYDRATE'; payload: Persisted | null }
-  | { type: 'SEND_MESSAGE'; groupId: string; text: string }
-  | { type: 'SEND_LOCATION'; groupId: string; label: string; meta: string; live?: boolean }
+  | { type: 'BOOTSTRAP'; payload: BootstrapResponse }
+  | { type: 'MERGE_MESSAGES'; messages: Message[] }
+  | { type: 'MERGE_READ'; groupId: string; userId: string; ts: number }
+  | { type: 'GROUP_UPSERT'; group: ChatGroup }
+  | { type: 'GROUP_REMOVE'; groupId: string }
+  | { type: 'PREPEND_HISTORY'; groupId: string; messages: Message[]; hasMore: boolean }
+  | { type: 'SET_LAST_SYNC'; serverTime: string }
+  | { type: 'MARK_READ'; groupId: string }
   | { type: 'START_LIVE'; groupId: string; expiresLabel: string }
   | { type: 'STOP_LIVE'; groupId: string }
-  | { type: 'MARK_READ'; groupId: string }
   | { type: 'ADD_EXPENSE'; expense: Omit<Expense, 'id' | 'ts'> }
   | { type: 'SETTLE'; groupId: string; person: string }
   | { type: 'SET_SESSION'; session: Session | null }
@@ -105,45 +154,108 @@ type Action =
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
-function push(map: Record<string, Message[]>, groupId: string, msg: Message): Record<string, Message[]> {
-  return { ...map, [groupId]: [...(map[groupId] ?? []), msg] };
+function dropGroup(state: AppState, groupId: string): AppState {
+  const { [groupId]: _g, ...groups } = state.groups;
+  const { [groupId]: _m, ...messages } = state.messages;
+  const { [groupId]: _u, ...unread } = state.unread;
+  const { [groupId]: _r, ...readCursors } = state.readCursors;
+  const { [groupId]: _h, ...hasMore } = state.hasMore;
+  return { ...state, groups, messages, unread, readCursors, hasMore };
 }
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'HYDRATE':
-      // Merge the persisted demo-data slice only — session/family are never
-      // part of this blob (see Persisted), so this can't clobber a session
-      // already established by the token-check effect, whichever runs first.
+      // Merge the persisted slice only — session/family are never part of it
+      // (see Persisted), so this can't clobber a session already established
+      // by the token-check effect, whichever runs first.
       return action.payload
         ? { ...seedState, ...action.payload, session: state.session, family: state.family, sessionReady: state.sessionReady, hydrated: true }
         : { ...state, hydrated: true };
 
-    case 'SEND_MESSAGE': {
-      const msg: Message = { id: uid(), mine: true, text: action.text, ts: Date.now() };
-      return { ...state, messages: push(state.messages, action.groupId, msg) };
+    case 'BOOTSTRAP': {
+      const groups: Record<string, ChatGroup> = {};
+      const messages: Record<string, Message[]> = {};
+      const readCursors: Record<string, Record<string, number>> = {};
+      const unread: Record<string, number> = {};
+      const hasMore: Record<string, boolean> = {};
+      for (const g of action.payload.groups) {
+        groups[g.id] = { id: g.id, familyId: g.familyId, name: g.name, members: g.members };
+        messages[g.id] = g.latest.map(fromServerMessage);
+        const cursors: Record<string, number> = {};
+        for (const [userId, iso] of Object.entries(g.cursors)) cursors[userId] = Date.parse(iso);
+        readCursors[g.id] = cursors;
+        unread[g.id] = g.unread;
+        hasMore[g.id] = g.latest.length >= 30;
+      }
+      return { ...state, groups, messages, readCursors, unread, hasMore, lastSync: action.payload.serverTime };
     }
 
-    case 'SEND_LOCATION': {
-      const msg: Message = {
-        id: uid(),
-        mine: true,
-        live: action.live,
-        loc: { label: action.label, meta: action.meta },
-        ts: Date.now(),
-      };
-      return { ...state, messages: push(state.messages, action.groupId, msg) };
+    case 'MERGE_MESSAGES': {
+      const myId = state.session?.userId;
+      let messages = state.messages;
+      let unread = state.unread;
+      const byGroup = new Map<string, Message[]>();
+      for (const m of action.messages) {
+        if (!byGroup.has(m.groupId)) byGroup.set(m.groupId, []);
+        byGroup.get(m.groupId)!.push(m);
+      }
+      for (const [groupId, incoming] of byGroup) {
+        const existing = messages[groupId] ?? [];
+        const existingIds = new Set(existing.map((m) => m.id));
+        const fresh = incoming.filter((m) => !existingIds.has(m.id));
+        if (!fresh.length) continue;
+        const merged = [...existing, ...fresh].sort((a, b) => a.ts - b.ts);
+        messages = { ...messages, [groupId]: merged };
+        const bump = fresh.filter((m) => m.authorId !== myId).length;
+        if (bump) unread = { ...unread, [groupId]: (unread[groupId] ?? 0) + bump };
+      }
+      return { ...state, messages, unread };
     }
+
+    case 'MERGE_READ': {
+      const cur = state.readCursors[action.groupId] ?? {};
+      const existingTs = cur[action.userId] ?? 0;
+      if (action.ts <= existingTs) return state; // cursors only ever move forward
+      return { ...state, readCursors: { ...state.readCursors, [action.groupId]: { ...cur, [action.userId]: action.ts } } };
+    }
+
+    case 'GROUP_UPSERT': {
+      const myId = state.session?.userId;
+      if (myId && !action.group.members.includes(myId)) {
+        // I'm no longer a member (left or was removed) — drop it entirely.
+        return dropGroup(state, action.group.id);
+      }
+      return { ...state, groups: { ...state.groups, [action.group.id]: action.group } };
+    }
+
+    case 'GROUP_REMOVE':
+      return dropGroup(state, action.groupId);
+
+    case 'PREPEND_HISTORY': {
+      const existing = state.messages[action.groupId] ?? [];
+      const existingIds = new Set(existing.map((m) => m.id));
+      const fresh = action.messages.filter((m) => !existingIds.has(m.id));
+      const merged = [...fresh, ...existing].sort((a, b) => a.ts - b.ts);
+      return {
+        ...state,
+        messages: { ...state.messages, [action.groupId]: merged },
+        hasMore: { ...state.hasMore, [action.groupId]: action.hasMore },
+      };
+    }
+
+    case 'SET_LAST_SYNC':
+      return { ...state, lastSync: action.serverTime };
+
+    case 'MARK_READ':
+      if (!state.unread[action.groupId]) return state;
+      return { ...state, unread: { ...state.unread, [action.groupId]: 0 } };
 
     case 'START_LIVE':
       return { ...state, live: { ...state.live, [action.groupId]: { since: Date.now(), expiresLabel: action.expiresLabel } } };
 
     case 'STOP_LIVE':
       return { ...state, live: { ...state.live, [action.groupId]: undefined } };
-
-    case 'MARK_READ':
-      if (!state.unread[action.groupId]) return state;
-      return { ...state, unread: { ...state.unread, [action.groupId]: 0 } };
 
     case 'ADD_EXPENSE':
       return { ...state, expenses: [...state.expenses, { ...action.expense, id: uid(), ts: Date.now() }] };
@@ -167,7 +279,8 @@ function reducer(state: AppState, action: Action): AppState {
       return state.sessionReady ? state : { ...state, sessionReady: true };
 
     case 'LOGOUT':
-      // Clears session+family only — local demo data (messages, expenses, …) stays put.
+      // Clears session+family only — local/cached data stays put (the next
+      // login's bootstrap replaces the chat slices wholesale).
       return { ...state, session: null, family: null };
 
     default:
@@ -233,6 +346,22 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // Bootstrap chat state whenever a session becomes available (fresh login,
+  // or the token-check effect above resolving one at launch).
+  useEffect(() => {
+    const token = state.session?.token;
+    if (!token) return;
+    let cancelled = false;
+    getBootstrap(token)
+      .then((payload) => {
+        if (!cancelled) dispatch({ type: 'BOOTSTRAP', payload });
+      })
+      .catch((err) => console.warn('[store] bootstrap failed', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [state.session?.token]);
+
   const value = useMemo(() => ({ state, dispatch }), [state]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
@@ -245,6 +374,12 @@ function useCtx(): AppContextValue {
   return ctx;
 }
 
+/** Internal: raw dispatch access for the realtime bridge (useRealtime.ts).
+ * Screens should use useActions() instead. */
+export function useStoreDispatch(): React.Dispatch<Action> {
+  return useCtx().dispatch;
+}
+
 /** Bound action creators — the write API for screens. */
 export function useActions() {
   const { state, dispatch } = useCtx();
@@ -252,12 +387,74 @@ export function useActions() {
 
   return useMemo(
     () => ({
-      sendMessage: (groupId: string, text: string) => dispatch({ type: 'SEND_MESSAGE', groupId, text }),
-      sendLocation: (groupId: string, label: string, meta: string, live?: boolean) =>
-        dispatch({ type: 'SEND_LOCATION', groupId, label, meta, live }),
+      sendMessage: (groupId: string, text: string) => {
+        const authorId = state.session?.userId;
+        if (!authorId) return;
+        const id = uid();
+        const msg: Message = { id, groupId, authorId, kind: 'text', text, ts: Date.now() };
+        dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
+        if (token) {
+          postMessage(token, groupId, { id, kind: 'text', body: text }).catch((err) => console.warn('[store] sendMessage failed', err));
+        }
+      },
+
+      sendLocation: (groupId: string, label: string, meta: string, live?: boolean) => {
+        const authorId = state.session?.userId;
+        if (!authorId) return;
+        const id = uid();
+        const loc = { label, meta };
+        const msg: Message = { id, groupId, authorId, kind: 'loc', loc, live, ts: Date.now() };
+        dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
+        if (token) {
+          postMessage(token, groupId, { id, kind: 'loc', loc, live }).catch((err) => console.warn('[store] sendLocation failed', err));
+        }
+      },
+
       startLive: (groupId: string, expiresLabel: string) => dispatch({ type: 'START_LIVE', groupId, expiresLabel }),
       stopLive: (groupId: string) => dispatch({ type: 'STOP_LIVE', groupId }),
-      markRead: (groupId: string) => dispatch({ type: 'MARK_READ', groupId }),
+
+      markRead: (groupId: string) => {
+        const userId = state.session?.userId;
+        const now = Date.now();
+        dispatch({ type: 'MARK_READ', groupId });
+        if (userId) dispatch({ type: 'MERGE_READ', groupId, userId, ts: now });
+        if (token) postRead(token, groupId, new Date(now).toISOString()).catch((err) => console.warn('[store] markRead failed', err));
+      },
+
+      loadEarlier: async (groupId: string) => {
+        if (!token) return;
+        const existing = state.messages[groupId] ?? [];
+        const oldest = existing[0];
+        const before = oldest ? new Date(oldest.ts).toISOString() : undefined;
+        const { messages } = await getGroupMessages(token, groupId, { before, limit: 30 });
+        dispatch({ type: 'PREPEND_HISTORY', groupId, messages: messages.map(fromServerMessage), hasMore: messages.length >= 30 });
+      },
+
+      createGroup: async (name: string, memberIds: string[]): Promise<string> => {
+        if (!token) throw new Error('not signed in');
+        const { group } = await apiCreateGroup(token, { name, memberIds });
+        dispatch({ type: 'GROUP_UPSERT', group: toChatGroup(group) });
+        return group.id;
+      },
+
+      renameGroup: async (groupId: string, name: string) => {
+        if (!token) throw new Error('not signed in');
+        const { group } = await apiRenameGroup(token, groupId, name);
+        dispatch({ type: 'GROUP_UPSERT', group: toChatGroup(group) });
+      },
+
+      addMember: async (groupId: string, userId: string) => {
+        if (!token) throw new Error('not signed in');
+        const { group } = await addGroupMember(token, groupId, userId);
+        dispatch({ type: 'GROUP_UPSERT', group: toChatGroup(group) });
+      },
+
+      leaveGroup: async (groupId: string) => {
+        if (!token || !state.session) throw new Error('not signed in');
+        await removeGroupMember(token, groupId, state.session.userId);
+        dispatch({ type: 'GROUP_REMOVE', groupId });
+      },
+
       addExpense: (expense: Omit<Expense, 'id' | 'ts'>) => dispatch({ type: 'ADD_EXPENSE', expense }),
       settle: (groupId: string, person: string) => dispatch({ type: 'SETTLE', groupId, person }),
 
@@ -306,35 +503,52 @@ export function useActions() {
         dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
       },
     }),
-    [dispatch, token],
+    [dispatch, token, state.session, state.messages],
   );
 }
 
-/** A chat-list row: static group meta + live-derived preview/time/unread/live. */
-export interface ChatRow extends Group {
+/** A chat-list row: dynamic group meta + derived preview/time/unread/live. */
+export interface ChatRow {
+  id: string;
+  name: string;
+  /** Group size for the row badge; null for a 1:1 DM. */
+  members: number | null;
   preview: string;
   time: string;
   unread: number;
   live: boolean;
 }
 
+function messagePreview(m: Message | undefined, myId: string | undefined, nameOf: (id: string) => string): string {
+  if (!m) return 'No messages yet';
+  const who = m.authorId === myId ? 'You: ' : `${nameOf(m.authorId)}: `;
+  if (m.kind === 'loc') return `${who}📍 ${m.loc?.label ?? 'shared a location'}`;
+  if (m.kind === 'voice') return `${who}🎤 Voice message`;
+  return `${who}${m.text ?? ''}`.trim();
+}
+
 export function useChatRows(): ChatRow[] {
   const { state } = useCtx();
-  return useMemo(
-    () =>
-      GROUPS.map((g) => {
-        const msgs = state.messages[g.id];
-        const last = msgs && msgs.length ? msgs[msgs.length - 1] : undefined;
-        return {
-          ...g,
-          preview: previewOf(msgs),
-          time: last ? timeLabel(last.ts) : '',
-          unread: state.unread[g.id] ?? 0,
-          live: !!state.live[g.id],
-        };
-      }),
-    [state.messages, state.unread, state.live],
-  );
+  return useMemo(() => {
+    const myId = state.session?.userId;
+    const nameOf = (id: string) => state.family?.members.find((m) => m.id === id)?.name ?? id;
+    const rows = Object.values(state.groups).map((g): ChatRow & { _lastTs: number } => {
+      const msgs = state.messages[g.id];
+      const last = msgs && msgs.length ? msgs[msgs.length - 1] : undefined;
+      return {
+        id: g.id,
+        name: g.name,
+        members: g.members.length > 2 ? g.members.length : null,
+        preview: messagePreview(last, myId, nameOf),
+        time: last ? timeLabel(last.ts) : '',
+        unread: state.unread[g.id] ?? 0,
+        live: !!state.live[g.id],
+        _lastTs: last?.ts ?? 0,
+      };
+    });
+    rows.sort((a, b) => b._lastTs - a._lastTs || a.name.localeCompare(b.name));
+    return rows.map(({ _lastTs, ...row }) => row);
+  }, [state.groups, state.messages, state.unread, state.live, state.session, state.family]);
 }
 
 export function useMessages(groupId: string): Message[] {
@@ -354,6 +568,27 @@ export function useLive(groupId: string): LiveShare | undefined {
 export function useLiveGroups(): string[] {
   const { state } = useCtx();
   return useMemo(() => Object.keys(state.live).filter((id) => state.live[id]), [state.live]);
+}
+
+export function useGroups(): Record<string, ChatGroup> {
+  return useCtx().state.groups;
+}
+
+export function useGroup(groupId: string): ChatGroup | undefined {
+  return useCtx().state.groups[groupId];
+}
+
+/** groupId -> userId -> last-read ts (ms), for computing read receipts. */
+export function useReadCursors(groupId: string): Record<string, number> {
+  return useCtx().state.readCursors[groupId] ?? {};
+}
+
+export function useHasMore(groupId: string): boolean {
+  return !!useCtx().state.hasMore[groupId];
+}
+
+export function useLastSync(): string | null {
+  return useCtx().state.lastSync;
 }
 
 export function useLedger(groupId: string): LedgerSummary {

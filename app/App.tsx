@@ -8,7 +8,7 @@ import * as Notifications from 'expo-notifications';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { useFamilyChatsFonts } from './src/theme';
 import { semantic } from './src/theme';
-import { AppStoreProvider, useFamily, useSession, useSessionReady } from './src/store';
+import { AppStoreProvider, useFamily, useRealtime, useSession, useSessionReady } from './src/store';
 import { LoginScreen, FamilyGateScreen } from './src/screens';
 import { usePushRegistration } from './src/notifications/registerPushToken';
 
@@ -30,6 +30,7 @@ function Gate() {
   const session = useSession();
   const family = useFamily();
   usePushRegistration(session?.token);
+  useRealtime();
 
   if (!session) return <LoginScreen />;
   if (!family) return <FamilyGateScreen />;

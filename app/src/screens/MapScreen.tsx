@@ -6,7 +6,7 @@ import { Icon, IconButton } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { PresenceDot } from '../components/chat';
 import { MapPin, LivePill } from '../components/location';
-import { CURRENT_USER, groupById, useLiveGroups, useLive } from '../store';
+import { useFamily, useGroup, useLiveGroups, useLive, useSession } from '../store';
 
 // Fixed pin positions on the stylised map; names are filled from the live group.
 const SLOTS = [
@@ -20,8 +20,11 @@ const DISTANCES = ['0.4 mi · 6 min', '1.1 mi · 14 min', '0.7 mi · 9 min'];
 export function MapScreen() {
   const liveGroups = useLiveGroups();
   const activeId = liveGroups[0];
-  const group = activeId ? groupById(activeId) : undefined;
+  const group = useGroup(activeId ?? '');
   const live = useLive(activeId ?? '');
+  const session = useSession();
+  const family = useFamily();
+  const nameOf = (id: string) => family?.members.find((m) => m.id === id)?.name ?? id;
 
   if (!group) {
     return (
@@ -39,8 +42,10 @@ export function MapScreen() {
     );
   }
 
-  const others = group.roster.filter((n) => n !== CURRENT_USER);
-  const onMap = [CURRENT_USER, ...others].slice(0, SLOTS.length);
+  const myId = session?.userId;
+  const otherIds = group.members.filter((id) => id !== myId);
+  const others = otherIds.map(nameOf);
+  const onMap = [nameOf(myId ?? ''), ...others].slice(0, SLOTS.length);
   const onTheWay: [string, string][] = others.slice(0, 2).map((n, i) => [n, DISTANCES[i] ?? '']);
 
   return (

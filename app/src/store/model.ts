@@ -5,6 +5,11 @@
 export const CURRENT_USER = 'You Now';
 
 // ─────────────────────────────────────────────────────────── Groups
+//
+// NOTE: as of Phase B, real chat groups are server-backed and dynamic (see
+// `ChatGroup` in AppStore.tsx, fed by GET /bootstrap). This static roster is
+// now used ONLY by the local-only Expenses feature (ledger math keyed by
+// display name) — do not wire it back into chat state.
 
 export interface Group {
   id: string;
@@ -25,61 +30,41 @@ export const GROUPS: Group[] = [
 export const groupById = (id: string) => GROUPS.find((g) => g.id === id);
 
 // ─────────────────────────────────────────────────────────── Messages
+//
+// A group chat message. Server-backed (see ServerMessage in api/client.ts) —
+// `mine` is deliberately NOT stored here; derive it at render time as
+// `message.authorId === session.userId`.
 
 export interface Message {
   id: string;
-  author?: string;
-  mine?: boolean;
+  groupId: string;
+  authorId: string;
+  /** Best-effort display name, resolved from family members when known. */
+  authorName?: string;
+  kind: 'text' | 'loc' | 'voice';
   text?: string;
   live?: boolean;
-  loc?: { label: string; meta: string };
+  loc?: { label: string; meta?: string };
   ts: number;
 }
 
-// A fixed reference point so seeded timestamps are deterministic (2026-07-05).
+// A fixed reference point so seeded expense timestamps are deterministic
+// (2026-07-05). Chat no longer uses this — messages carry real server ts.
 const SEED_DAY = Date.UTC(2026, 6, 5, 6, 0, 0);
 const at = (h: number, m: number) => SEED_DAY + (h * 60 + m) * 60_000;
-
-export const SEED_MESSAGES: Record<string, Message[]> = {
-  trail: [
-    { id: 't1', author: 'Mara', text: "who's actually coming today?", ts: at(14, 20) },
-    { id: 't2', mine: true, text: 'me! leaving now', ts: at(14, 22) },
-    { id: 't3', author: 'Dev', text: 'same, 10 min out', ts: at(14, 25) },
-    { id: 't4', mine: true, loc: { label: 'The Fountain', meta: '0.4 mi · 6 min walk' }, text: 'meet here?', ts: at(14, 30) },
-    { id: 't5', author: 'Mara', text: 'perfect 👌', ts: at(14, 32) },
-  ],
-  climb: [{ id: 'c1', author: 'Sam', loc: { label: 'Boulder Field', meta: '2.1 mi · trailhead lot' }, text: 'shared a location', ts: at(13, 10) }],
-  dev: [{ id: 'd1', author: 'Dev', text: 'see you there', ts: at(10, 2) }],
-  food: [{ id: 'f1', mine: true, text: 'booking a table', ts: at(9, 40) }],
-  fam: [{ id: 'm1', author: 'Mom', text: 'call me when free', ts: at(8, 15) }],
-};
-
-export const SEED_UNREAD: Record<string, number> = { trail: 3, fam: 1 };
-export const SEED_LIVE: Record<string, LiveShare | undefined> = {
-  trail: { since: at(13, 34), expiresLabel: '58 min left' },
-};
 
 export interface LiveShare {
   since: number;
   expiresLabel: string;
 }
 
-/** One-line preview of a group's latest message for the chat list. */
-export function previewOf(msgs: Message[] | undefined): string {
-  if (!msgs || msgs.length === 0) return 'No messages yet';
-  const m = msgs[msgs.length - 1];
-  const who = m.mine ? 'You: ' : m.author ? `${m.author}: ` : '';
-  if (m.loc) return `${who}📍 ${m.loc.label}`;
-  return `${who}${m.text ?? ''}`.trim();
-}
-
-/** Clock label (HH:MM) for a timestamp; weekday if not today. */
-const NOW_REF = new Date(Date.UTC(2026, 6, 5, 15, 0, 0));
+/** Clock label (HH:MM) for a timestamp; weekday if not today (real wall clock). */
 export function timeLabel(ts: number): string {
   const d = new Date(ts);
-  const sameDay = d.getUTCFullYear() === NOW_REF.getUTCFullYear() && d.getUTCMonth() === NOW_REF.getUTCMonth() && d.getUTCDate() === NOW_REF.getUTCDate();
-  if (sameDay) return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
 }
 
 // ─────────────────────────────────────────────────────────── Expenses ledger

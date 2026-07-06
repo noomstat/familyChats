@@ -4,17 +4,17 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { getFocusedRouteNameFromRoute, RouteProp } from '@react-navigation/native';
 import { MessageCircle, Map as MapIcon, User } from 'lucide-react-native';
 import { semantic, fontFamily } from '../theme';
-import { ChatListScreen, ThreadScreen, MapScreen, YouScreen, ExpensesScreen } from '../screens';
+import { ChatListScreen, ThreadScreen, NewChatScreen, MapScreen, YouScreen, ExpensesScreen } from '../screens';
 import type { ChatsStackParamList, RootTabParamList } from './types';
 
 const ChatsStack = createNativeStackNavigator<ChatsStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
-// Thread & Expenses have their own full-bleed headers/back buttons and no
-// bottom nav in the design — only the top-level list screens show tab bar.
+// Thread, Expenses & NewChat have their own full-bleed headers/back buttons
+// and no bottom nav in the design — only the top-level list screen shows tab bar.
 function chatsTabBarStyle(route: RouteProp<RootTabParamList, 'Chats'>) {
   const focusedRoute = getFocusedRouteNameFromRoute(route) ?? 'ChatList';
-  if (focusedRoute === 'Thread' || focusedRoute === 'Expenses') {
+  if (focusedRoute === 'Thread' || focusedRoute === 'Expenses' || focusedRoute === 'NewChat') {
     return { display: 'none' as const };
   }
   return { backgroundColor: semantic.surfaceCard, borderTopColor: semantic.borderSubtle };
@@ -25,6 +25,7 @@ function ChatsNavigator() {
     <ChatsStack.Navigator screenOptions={{ headerShown: false }}>
       <ChatsStack.Screen name="ChatList" component={ChatListScreen} />
       <ChatsStack.Screen name="Thread" component={ThreadScreen} />
+      <ChatsStack.Screen name="NewChat" component={NewChatScreen} />
       <ChatsStack.Screen name="Expenses" component={ExpensesScreen} />
     </ChatsStack.Navigator>
   );

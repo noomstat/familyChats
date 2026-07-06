@@ -106,6 +106,99 @@ export function getFamilyMembers(token: string) {
   return api<{ members: FamilyMember[] }>('/families/members', { token });
 }
 
+// ── Family Chat ──────────────────────────────────────────────
+
+export interface ServerLoc {
+  label: string;
+  meta?: string;
+  live?: boolean;
+}
+
+export interface ServerMessage {
+  id: string;
+  groupId: string;
+  authorId: string;
+  kind: 'text' | 'loc' | 'voice';
+  body: string | null;
+  loc: ServerLoc | null;
+  mediaPath: string | null;
+  durationMs: number | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export interface ServerGroup {
+  id: string;
+  familyId: string;
+  name: string;
+  /** User ids. */
+  members: string[];
+}
+
+export interface BootstrapGroup extends ServerGroup {
+  /** Last ~30 messages, ascending by ts. */
+  latest: ServerMessage[];
+  unread: number;
+  lastReadTs: string | null;
+  /** Every member's read cursor (ISO), keyed by user id. */
+  cursors: Record<string, string>;
+}
+
+export interface BootstrapResponse {
+  groups: BootstrapGroup[];
+  serverTime: string;
+}
+
+export interface SyncResponse {
+  messages: ServerMessage[];
+  reads: { groupId: string; userId: string; lastReadTs: string }[];
+  serverTime: string;
+}
+
+export function getBootstrap(token: string) {
+  return api<BootstrapResponse>('/bootstrap', { token });
+}
+
+export function getSync(token: string, after: string) {
+  return api<SyncResponse>(`/sync?after=${encodeURIComponent(after)}`, { token });
+}
+
+export function getGroupMessages(token: string, groupId: string, opts: { before?: string; limit?: number } = {}) {
+  const params = new URLSearchParams();
+  if (opts.before) params.set('before', opts.before);
+  if (opts.limit) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  return api<{ messages: ServerMessage[] }>(`/groups/${groupId}/messages${qs ? `?${qs}` : ''}`, { token });
+}
+
+export function postMessage(
+  token: string,
+  groupId: string,
+  input: { id: string; kind?: 'text' | 'loc' | 'voice'; body?: string; loc?: ServerLoc; live?: boolean },
+) {
+  return api<{ message: ServerMessage }>(`/groups/${groupId}/messages`, { method: 'POST', body: input, token });
+}
+
+export function postRead(token: string, groupId: string, ts: string) {
+  return api<{ lastReadTs: string }>(`/groups/${groupId}/read`, { method: 'POST', body: { ts }, token });
+}
+
+export function createGroup(token: string, input: { id?: string; name: string; memberIds: string[] }) {
+  return api<{ group: ServerGroup }>('/groups', { method: 'POST', body: input, token });
+}
+
+export function renameGroup(token: string, groupId: string, name: string) {
+  return api<{ group: ServerGroup }>(`/groups/${groupId}`, { method: 'PATCH', body: { name }, token });
+}
+
+export function addGroupMember(token: string, groupId: string, userId: string) {
+  return api<{ group: ServerGroup }>(`/groups/${groupId}/members`, { method: 'POST', body: { userId }, token });
+}
+
+export function removeGroupMember(token: string, groupId: string, userId: string) {
+  return api<{ group: ServerGroup }>(`/groups/${groupId}/members/${userId}`, { method: 'DELETE', token });
+}
+
 // ── Realtime ─────────────────────────────────────────────────
 
 /** ws(s) URL for the realtime hub, carrying the session token as a query param. */

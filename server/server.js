@@ -7,6 +7,17 @@ import { pool } from './src/db.js';
 import { register, login, logout, requireAuth } from './src/auth.js';
 import { createFamily, joinFamily, getFamilyForUser, regenerateCode } from './src/family.js';
 import { attachWebSocketServer } from './src/ws.js';
+import {
+  getBootstrap,
+  getSyncSince,
+  getMessages,
+  createMessage,
+  setRead,
+  createGroup,
+  renameGroup,
+  addMember,
+  removeMember,
+} from './src/chat.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -108,6 +119,95 @@ app.delete('/devices/:token', requireAuth, async (req, res, next) => {
   try {
     await removeToken(req.params.token);
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Family Chat ──────────────────────────────────────────────
+
+app.get('/bootstrap', requireAuth, async (req, res, next) => {
+  try {
+    res.json(await getBootstrap(req.user.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/sync', requireAuth, async (req, res, next) => {
+  try {
+    const { after } = req.query;
+    if (!after) return res.status(400).json({ error: 'after is required' });
+    res.json(await getSyncSince(req.user.id, after));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/groups/:id/messages', requireAuth, async (req, res, next) => {
+  try {
+    const { before, limit } = req.query;
+    const messages = await getMessages(req.params.id, req.user.id, { before, limit: limit ? Number(limit) : undefined });
+    res.json({ messages });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/groups/:id/messages', requireAuth, async (req, res, next) => {
+  try {
+    const { id, kind, body, loc, live } = req.body ?? {};
+    const message = await createMessage({ id, groupId: req.params.id, authorId: req.user.id, kind, body, loc, live });
+    res.status(201).json({ message });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/groups/:id/read', requireAuth, async (req, res, next) => {
+  try {
+    const { ts } = req.body ?? {};
+    if (!ts) return res.status(400).json({ error: 'ts is required' });
+    res.json(await setRead(req.params.id, req.user.id, ts));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/groups', requireAuth, async (req, res, next) => {
+  try {
+    const found = await getFamilyForUser(req.user.id);
+    if (!found) return res.status(400).json({ error: 'not in a family' });
+    const { id, name, memberIds } = req.body ?? {};
+    const group = await createGroup({ id, familyId: found.family.id, name, memberIds, createdBy: req.user.id });
+    res.status(201).json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/groups/:id', requireAuth, async (req, res, next) => {
+  try {
+    const group = await renameGroup({ groupId: req.params.id, userId: req.user.id, name: req.body?.name });
+    res.json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/groups/:id/members', requireAuth, async (req, res, next) => {
+  try {
+    const group = await addMember({ groupId: req.params.id, actorId: req.user.id, userId: req.body?.userId });
+    res.status(201).json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/groups/:id/members/:userId', requireAuth, async (req, res, next) => {
+  try {
+    const group = await removeMember({ groupId: req.params.id, actorId: req.user.id, userId: req.params.userId });
+    res.json({ group });
   } catch (err) {
     next(err);
   }

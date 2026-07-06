@@ -31,6 +31,7 @@ import {
   User,
   Lock,
   LogOut,
+  Settings,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -70,6 +71,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   user: User,
   lock: Lock,
   'log-out': LogOut,
+  settings: Settings,
 };
 
 export type IconName = keyof typeof REGISTRY;

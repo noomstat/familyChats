@@ -7,10 +7,16 @@ export {
   useUnread,
   useLive,
   useLiveGroups,
+  useGroups,
+  useGroup,
+  useReadCursors,
+  useHasMore,
+  useLastSync,
   useLedger,
   useHydrated,
   useSession,
   useFamily,
   useSessionReady,
 } from './AppStore';
-export type { AppState, ChatRow, Session, FamilyState } from './AppStore';
+export type { AppState, ChatRow, ChatGroup, Session, FamilyState } from './AppStore';
+export { useRealtime } from './useRealtime';

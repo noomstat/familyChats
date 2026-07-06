@@ -1,45 +1,112 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
-import { Icon, IconButton, Input } from '../components/core';
+import { colors, semantic, fontFamily, radius, shadow } from '../theme';
+import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { PresenceDot } from '../components/chat';
 import { ChatBubble } from '../components/chat';
 import { LocationTile, LivePill } from '../components/location';
-import { Message, useActions, useLive, useMessages } from '../store';
+import {
+  ChatGroup,
+  Group,
+  Message,
+  useActions,
+  useFamily,
+  useHasMore,
+  useLive,
+  useMessages,
+  useReadCursors,
+  useSession,
+} from '../store';
+import type { FamilyMember } from '../api/client';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Thread'>;
 
 export function ThreadScreen({ route, navigation }: Props) {
-  const { group } = route.params;
-  const msgs = useMessages(group.id);
-  const live = useLive(group.id);
+  const routeGroup = route.params.group;
+  const family = useFamily();
+  const session = useSession();
+  const msgs = useMessages(routeGroup.id);
+  const cursors = useReadCursors(routeGroup.id);
+  const hasMore = useHasMore(routeGroup.id);
+  const live = useLive(routeGroup.id);
   const sharing = !!live;
   const actions = useActions();
   const [draft, setDraft] = useState('');
   const [sheet, setSheet] = useState(false);
-  const listRef = useRef<FlatList<Message>>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const isFocusedRef = useRef(false);
 
-  // Opening a thread clears its unread badge.
-  useEffect(() => {
-    actions.markRead(group.id);
-  }, [group.id, actions]);
+  const members = family?.members ?? [];
+  const nameOf = useCallback((id: string) => members.find((m) => m.id === id)?.name ?? id, [members]);
+
+  // The group route param is a snapshot at navigation time; membership/name
+  // can change live (rename, add/remove member) — but a fixed id is stable.
+  const group: ChatGroup = routeGroup;
+
+  // Expenses is the local-only, pre-existing ledger feature — it's keyed by
+  // a display-name roster (see model.ts's `Group`), not user ids. Adapt the
+  // real chat group's shape minimally so that screen keeps compiling/working.
+  const expensesGroup: Group = useMemo(
+    () => ({
+      id: group.id,
+      name: group.name,
+      members: group.members.length,
+      roster: group.members.map(nameOf),
+    }),
+    [group.id, group.name, group.members, nameOf],
+  );
+
+  // Opening/refocusing a thread — or new messages arriving while it's
+  // focused — marks it read.
+  useFocusEffect(
+    useCallback(() => {
+      isFocusedRef.current = true;
+      actions.markRead(group.id);
+      return () => {
+        isFocusedRef.current = false;
+      };
+    }, [group.id, actions]),
+  );
+  React.useEffect(() => {
+    if (isFocusedRef.current) actions.markRead(group.id);
+  }, [msgs.length, group.id, actions]);
+
+  const inverted = useMemo(() => [...msgs].reverse(), [msgs]);
 
   const send = () => {
     if (!draft.trim()) return;
     actions.sendMessage(group.id, draft.trim());
     setDraft('');
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   };
 
   const confirmShare = (dur: string) => {
     setSheet(false);
     actions.startLive(group.id, dur === 'until stopped' ? 'Sharing until stopped' : dur + ' left');
     actions.sendLocation(group.id, 'Your live location', 'Sharing · ' + dur, true);
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+  };
+
+  const loadEarlier = async () => {
+    if (loadingEarlier || !hasMore) return;
+    setLoadingEarlier(true);
+    try {
+      await actions.loadEarlier(group.id);
+    } catch (err) {
+      console.warn('[thread] loadEarlier failed', err);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
+
+  const readByAll = (m: Message): boolean => {
+    const others = group.members.filter((id) => id !== m.authorId);
+    if (!others.length) return false;
+    return others.every((id) => (cursors[id] ?? 0) >= m.ts);
   };
 
   return (
@@ -54,14 +121,15 @@ export function ThreadScreen({ route, navigation }: Props) {
             {sharing ? (
               <>
                 <PresenceDot state="live" size={7} />
-                <Text style={{ fontSize: 12, color: semantic.textMuted }}>3 sharing live · {group.members} members</Text>
+                <Text style={{ fontSize: 12, color: semantic.textMuted }}>sharing live · {group.members.length} members</Text>
               </>
             ) : (
-              <Text style={{ fontSize: 12, color: semantic.textMuted }}>{group.members ? group.members + ' members' : 'online'}</Text>
+              <Text style={{ fontSize: 12, color: semantic.textMuted }}>{group.members.length} members</Text>
             )}
           </View>
         </View>
-        <IconButton name="receipt" variant="soft" accessibilityLabel="Expenses" onPress={() => navigation.navigate('Expenses', { group })} />
+        <IconButton name="receipt" variant="soft" accessibilityLabel="Expenses" onPress={() => navigation.navigate('Expenses', { group: expensesGroup })} />
+        <IconButton name="settings" variant="soft" accessibilityLabel="Group settings" onPress={() => setSettingsOpen(true)} />
         <IconButton name="map" variant="soft" accessibilityLabel="View map" />
       </View>
 
@@ -76,13 +144,17 @@ export function ThreadScreen({ route, navigation }: Props) {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <FlatList
-          ref={listRef}
-          data={msgs}
+          data={inverted}
+          inverted
           keyExtractor={(m) => String(m.id)}
           contentContainerStyle={{ padding: 14, gap: 10 }}
           style={{ backgroundColor: semantic.surfacePage }}
-          renderItem={({ item }) => <ChatMsg m={item} />}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+          renderItem={({ item }) => (
+            <ChatMsg m={item} mine={item.authorId === session?.userId} authorName={item.authorName ?? nameOf(item.authorId)} read={item.authorId === session?.userId ? readByAll(item) : undefined} />
+          )}
+          onEndReached={loadEarlier}
+          onEndReachedThreshold={0.4}
+          ListFooterComponent={loadingEarlier ? <ActivityIndicator style={{ marginVertical: 12 }} color={colors.coral500} /> : null}
         />
 
         {/* composer */}
@@ -106,18 +178,33 @@ export function ThreadScreen({ route, navigation }: Props) {
       </KeyboardAvoidingView>
 
       {sheet && <ShareSheet onClose={() => setSheet(false)} onConfirm={confirmShare} />}
+      {settingsOpen && (
+        <GroupSettingsSheet
+          group={group}
+          familyMembers={members}
+          onClose={() => setSettingsOpen(false)}
+          onLeft={() => navigation.navigate('ChatList')}
+        />
+      )}
     </SafeAreaView>
   );
 }
 
-function ChatMsg({ m }: { m: Message }) {
+function ChatMsg({ m, mine, authorName, read }: { m: Message; mine: boolean; authorName: string; read?: boolean }) {
   const attachment = m.loc ? (
     <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
   ) : undefined;
   return (
-    <ChatBubble mine={m.mine} author={m.author} attachment={attachment}>
-      {m.text}
-    </ChatBubble>
+    <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
+      <ChatBubble mine={mine} author={mine ? undefined : authorName} attachment={attachment}>
+        {m.kind === 'voice' ? '🎤 Voice message' : m.text}
+      </ChatBubble>
+      {mine && (
+        <Text style={{ fontFamily: fontFamily.mono, fontSize: 10, marginTop: 2, marginRight: 8, color: read ? colors.coral500 : semantic.textFaint }}>
+          {read ? '✓✓' : '✓'}
+        </Text>
+      )}
+    </View>
   );
 }
 
@@ -149,6 +236,106 @@ function ShareSheet({ onClose, onConfirm }: { onClose: () => void; onConfirm: (d
           ))}
         </View>
       </View>
+    </View>
+  );
+}
+
+function GroupSettingsSheet({
+  group,
+  familyMembers,
+  onClose,
+  onLeft,
+}: {
+  group: ChatGroup;
+  familyMembers: FamilyMember[];
+  onClose: () => void;
+  onLeft: () => void;
+}) {
+  const actions = useActions();
+  const [name, setName] = useState(group.name);
+  const [saving, setSaving] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+
+  const memberList = group.members.map((id) => familyMembers.find((m) => m.id === id) ?? { id, name: id, username: id, role: 'member' as const });
+  const nonMembers = familyMembers.filter((m) => !group.members.includes(m.id));
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === group.name) return;
+    setSaving(true);
+    try {
+      await actions.renameGroup(group.id, trimmed);
+    } catch (err) {
+      console.warn('[thread] rename failed', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addMember = async (userId: string) => {
+    try {
+      await actions.addMember(group.id, userId);
+    } catch (err) {
+      console.warn('[thread] add member failed', err);
+    }
+  };
+
+  const leave = async () => {
+    setLeaving(true);
+    try {
+      await actions.leaveGroup(group.id);
+      onLeft();
+    } catch (err) {
+      console.warn('[thread] leave failed', err);
+      setLeaving(false);
+    }
+  };
+
+  return (
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}>
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <ScrollView
+        style={{ maxHeight: '85%' }}
+        contentContainerStyle={{ backgroundColor: semantic.surfaceCard, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 28, gap: 16, ...shadow.xl }}
+      >
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
+        <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Group settings</Text>
+
+        <View style={{ gap: 8 }}>
+          <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>Name</Text>
+          <Input value={name} onChangeText={setName} onSubmitEditing={save} placeholder="Group name" />
+          <Button size="sm" variant="secondary" disabled={saving || !name.trim() || name.trim() === group.name} onPress={save}>
+            Save name
+          </Button>
+        </View>
+
+        <View style={{ gap: 10 }}>
+          <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>Members ({memberList.length})</Text>
+          {memberList.map((m) => (
+            <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Avatar name={m.name} size={34} />
+              <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{m.name}</Text>
+            </View>
+          ))}
+        </View>
+
+        {nonMembers.length > 0 && (
+          <View style={{ gap: 8 }}>
+            <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>Add member</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {nonMembers.map((m) => (
+                <Chip key={m.id} onPress={() => addMember(m.id)}>
+                  {m.name}
+                </Chip>
+              ))}
+            </View>
+          </View>
+        )}
+
+        <Button block variant="danger" disabled={leaving} onPress={leave}>
+          Leave group
+        </Button>
+      </ScrollView>
     </View>
   );
 }

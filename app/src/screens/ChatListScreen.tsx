@@ -6,7 +6,7 @@ import { semantic, fontFamily, fontSize, space } from '../theme';
 import { Icon, IconButton, Input, Chip } from '../components/core';
 import { ConversationRow } from '../components/chat';
 import { PinMark } from '../components/brand/PinMark';
-import { useChatRows, ChatRow } from '../store';
+import { useChatRows, useGroups, ChatRow } from '../store';
 import type { ChatsStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'ChatList'>;
@@ -17,7 +17,9 @@ export function ChatListScreen({ navigation }: Props) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('All');
 
-  let rows: ChatRow[] = useChatRows();
+  const groups = useGroups();
+  const allRows: ChatRow[] = useChatRows();
+  let rows = allRows;
   if (filter === 'Live now') rows = rows.filter((g) => g.live);
   if (filter === 'Groups') rows = rows.filter((g) => g.members);
   if (filter === 'Unread') rows = rows.filter((g) => g.unread);
@@ -33,7 +35,7 @@ export function ChatListScreen({ navigation }: Props) {
           </View>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <IconButton name="bell" variant="soft" size="sm" accessibilityLabel="Notifications" />
-            <IconButton name="plus" variant="primary" size="sm" accessibilityLabel="New chat" />
+            <IconButton name="plus" variant="primary" size="sm" accessibilityLabel="New chat" onPress={() => navigation.navigate('NewChat')} />
           </View>
         </View>
         <Input value={q} onChangeText={setQ} placeholder="Search groups & places" leading={<Icon name="search" size={18} color={semantic.textMuted} />} />
@@ -51,10 +53,18 @@ export function ChatListScreen({ navigation }: Props) {
         keyExtractor={(g) => g.id}
         contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: space[6] }}
         renderItem={({ item }) => (
-          <ConversationRow {...item} onPress={() => navigation.navigate('Thread', { group: item })} />
+          <ConversationRow
+            {...item}
+            onPress={() => {
+              const g = groups[item.id];
+              if (g) navigation.navigate('Thread', { group: g });
+            }}
+          />
         )}
         ListEmptyComponent={
-          <Text style={{ textAlign: 'center', color: semantic.textFaint, padding: 40, fontSize: fontSize.bodySm }}>Nothing here yet</Text>
+          <Text style={{ textAlign: 'center', color: semantic.textFaint, padding: 40, fontSize: fontSize.bodySm }}>
+            {allRows.length === 0 ? 'Start your first family chat' : 'Nothing here yet'}
+          </Text>
         }
       />
     </SafeAreaView>
