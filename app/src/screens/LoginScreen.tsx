@@ -58,6 +58,10 @@ export function LoginScreen() {
               onChangeText={setUsername}
               placeholder="Username"
               keyboardType="default"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              textContentType="none"
               leading={<Icon name="user" size={18} color={semantic.textMuted} />}
             />
             <Input
@@ -65,6 +69,14 @@ export function LoginScreen() {
               onChangeText={setPassword}
               placeholder="Password"
               secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              // iOS pushes its Password AutoFill / "Automatic Strong Password"
+              // overlay onto secure fields, which blocks manual typing in Expo
+              // Go. 'oneTimeCode' is the standard workaround to suppress it.
+              textContentType={Platform.OS === 'ios' ? 'oneTimeCode' : 'none'}
+              returnKeyType="go"
               leading={<Icon name="lock" size={18} color={semantic.textMuted} />}
               onSubmitEditing={submit}
             />

@@ -2,7 +2,23 @@ import React, { useState } from 'react';
 import { StyleProp, TextInput, TextInputProps, View, ViewStyle } from 'react-native';
 import { semantic, fontFamily, fontSize, control, radius, shadow } from '../../theme';
 
-export interface InputProps extends Pick<TextInputProps, 'value' | 'defaultValue' | 'placeholder' | 'onChangeText' | 'onSubmitEditing' | 'secureTextEntry' | 'keyboardType'> {
+export interface InputProps
+  extends Pick<
+    TextInputProps,
+    | 'value'
+    | 'defaultValue'
+    | 'placeholder'
+    | 'onChangeText'
+    | 'onSubmitEditing'
+    | 'secureTextEntry'
+    | 'keyboardType'
+    | 'autoCapitalize'
+    | 'autoCorrect'
+    | 'autoComplete'
+    | 'textContentType'
+    | 'returnKeyType'
+    | 'maxLength'
+  > {
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
   size?: 'sm' | 'md' | 'lg';
@@ -25,6 +41,12 @@ export function Input({
   onSubmitEditing,
   secureTextEntry,
   keyboardType,
+  autoCapitalize,
+  autoCorrect,
+  autoComplete,
+  textContentType,
+  returnKeyType,
+  maxLength,
   style,
 }: InputProps) {
   const [focused, setFocused] = useState(false);
@@ -62,6 +84,12 @@ export function Input({
         onBlur={() => setFocused(false)}
         secureTextEntry={secureTextEntry}
         keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
+        autoComplete={autoComplete}
+        textContentType={textContentType}
+        returnKeyType={returnKeyType}
+        maxLength={maxLength}
         placeholderTextColor={semantic.textFaint}
         style={{
           flex: 1,
