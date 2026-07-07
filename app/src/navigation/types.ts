@@ -12,8 +12,18 @@ export type ChatsStackParamList = {
   NewChat: undefined;
 };
 
+// The Family hub tab: a Card grid linking to Calendar, Grocery, Tasks, Albums,
+// Memories, AI Search. Only Grocery/Tasks are wired up in this phase — the
+// rest render as "Soon" cards on FamilyHub until their phases land.
+export type FamilyStackParamList = {
+  FamilyHub: undefined;
+  Grocery: undefined;
+  Tasks: undefined;
+};
+
 export type RootTabParamList = {
   Chats: NavigatorScreenParams<ChatsStackParamList>;
+  Family: NavigatorScreenParams<FamilyStackParamList>;
   Map: undefined;
   You: undefined;
 };

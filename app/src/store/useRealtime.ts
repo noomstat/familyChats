@@ -36,6 +36,10 @@ export function useRealtime(): void {
           for (const r of data.reads) {
             dispatch({ type: 'MERGE_READ', groupId: r.groupId, userId: r.userId, ts: Date.parse(r.lastReadTs) });
           }
+          // Grocery/tasks are resent in full on every sync (see server's
+          // getSyncSince comment) — a plain replace is simplest and correct.
+          dispatch({ type: 'GROCERY_SET', grocery: data.grocery });
+          dispatch({ type: 'TASK_SET', tasks: data.tasks });
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
         } else {
           const data = await getBootstrap(session.token);
@@ -72,6 +76,15 @@ export function useRealtime(): void {
             break;
           case 'group':
             dispatch({ type: 'GROUP_UPSERT', group: data.group });
+            break;
+          case 'grocery':
+            if (data.action === 'upsert') dispatch({ type: 'GROCERY_UPSERT', item: data.item });
+            else if (data.action === 'remove') dispatch({ type: 'GROCERY_REMOVE', id: data.ids?.[0] });
+            else if (data.action === 'clear-checked') dispatch({ type: 'GROCERY_CLEAR_CHECKED' });
+            break;
+          case 'task':
+            if (data.action === 'upsert') dispatch({ type: 'TASK_UPSERT', task: data.task });
+            else if (data.action === 'remove') dispatch({ type: 'TASK_REMOVE', id: data.ids?.[0] });
             break;
           default:
             break; // 'hello' and any future event types we don't handle yet

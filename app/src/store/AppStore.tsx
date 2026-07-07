@@ -18,11 +18,17 @@ import {
   FamilyInfo,
   FamilyMember,
   ServerGroup,
+  ServerGroceryItem,
   ServerMessage,
+  ServerTask,
+  TaskPatch,
   authLogin,
   authLogout,
   authRegister,
   addGroupMember,
+  addGroceryItem,
+  addTaskItem,
+  clearCheckedGrocery as apiClearCheckedGrocery,
   createFamily as apiCreateFamily,
   createGroup as apiCreateGroup,
   getBootstrap,
@@ -32,7 +38,12 @@ import {
   postMessage,
   postRead,
   removeGroupMember,
+  removeGroceryItem,
+  removeTaskItem,
   renameGroup as apiRenameGroup,
+  toggleGroceryItem,
+  toggleTaskItem,
+  updateTaskItem,
 } from '../api/client';
 
 const STORAGE_KEY = 'familychats:store:v1';
@@ -81,6 +92,10 @@ export interface AppState {
   live: Record<string, LiveShare | undefined>;
   expenses: Expense[];
   transfers: Transfer[];
+  /** Server-backed shared grocery list, unsorted — see useGrocery() for display order. */
+  grocery: ServerGroceryItem[];
+  /** Server-backed shared tasks, unsorted — see useTasks() for display order. */
+  tasks: ServerTask[];
   /** True once we've attempted to load persisted state. */
   hydrated: boolean;
   /** The signed-in user, or null when logged out. Not persisted to AsyncStorage —
@@ -106,6 +121,8 @@ const seedState: AppState = {
   live: {},
   expenses: SEED_EXPENSES,
   transfers: SEED_TRANSFERS,
+  grocery: [],
+  tasks: [],
   hydrated: false,
   session: null,
   family: null,
@@ -147,6 +164,13 @@ type Action =
   | { type: 'STOP_LIVE'; groupId: string }
   | { type: 'ADD_EXPENSE'; expense: Omit<Expense, 'id' | 'ts'> }
   | { type: 'SETTLE'; groupId: string; person: string }
+  | { type: 'GROCERY_SET'; grocery: ServerGroceryItem[] }
+  | { type: 'GROCERY_UPSERT'; item: ServerGroceryItem }
+  | { type: 'GROCERY_REMOVE'; id: string }
+  | { type: 'GROCERY_CLEAR_CHECKED' }
+  | { type: 'TASK_SET'; tasks: ServerTask[] }
+  | { type: 'TASK_UPSERT'; task: ServerTask }
+  | { type: 'TASK_REMOVE'; id: string }
   | { type: 'SET_SESSION'; session: Session | null }
   | { type: 'SET_FAMILY'; family: FamilyState | null }
   | { type: 'SESSION_READY' }
@@ -188,7 +212,17 @@ function reducer(state: AppState, action: Action): AppState {
         unread[g.id] = g.unread;
         hasMore[g.id] = g.latest.length >= 30;
       }
-      return { ...state, groups, messages, readCursors, unread, hasMore, lastSync: action.payload.serverTime };
+      return {
+        ...state,
+        groups,
+        messages,
+        readCursors,
+        unread,
+        hasMore,
+        grocery: action.payload.grocery,
+        tasks: action.payload.tasks,
+        lastSync: action.payload.serverTime,
+      };
     }
 
     case 'MERGE_MESSAGES': {
@@ -268,6 +302,37 @@ function reducer(state: AppState, action: Action): AppState {
       const transfer: Transfer = { id: uid(), groupId: action.groupId, from: action.person, to: CURRENT_USER, amount: -p.net, ts: Date.now() };
       return { ...state, transfers: [...state.transfers, transfer] };
     }
+
+    case 'GROCERY_SET':
+      return { ...state, grocery: action.grocery };
+
+    case 'GROCERY_UPSERT': {
+      const idx = state.grocery.findIndex((g) => g.id === action.item.id);
+      const grocery = idx >= 0
+        ? state.grocery.map((g, i) => (i === idx ? action.item : g))
+        : [...state.grocery, action.item];
+      return { ...state, grocery };
+    }
+
+    case 'GROCERY_REMOVE':
+      return { ...state, grocery: state.grocery.filter((g) => g.id !== action.id) };
+
+    case 'GROCERY_CLEAR_CHECKED':
+      return { ...state, grocery: state.grocery.filter((g) => !g.checkedBy) };
+
+    case 'TASK_SET':
+      return { ...state, tasks: action.tasks };
+
+    case 'TASK_UPSERT': {
+      const idx = state.tasks.findIndex((t) => t.id === action.task.id);
+      const tasks = idx >= 0
+        ? state.tasks.map((t, i) => (i === idx ? action.task : t))
+        : [...state.tasks, action.task];
+      return { ...state, tasks };
+    }
+
+    case 'TASK_REMOVE':
+      return { ...state, tasks: state.tasks.filter((t) => t.id !== action.id) };
 
     case 'SET_SESSION':
       return { ...state, session: action.session };
@@ -458,6 +523,109 @@ export function useActions() {
       addExpense: (expense: Omit<Expense, 'id' | 'ts'>) => dispatch({ type: 'ADD_EXPENSE', expense }),
       settle: (groupId: string, person: string) => dispatch({ type: 'SETTLE', groupId, person }),
 
+      // ── Shared Grocery List ──────────────────────────────────
+
+      addGrocery: (label: string, qty?: string) => {
+        const userId = state.session?.userId;
+        if (!userId) return;
+        const id = uid();
+        const item: ServerGroceryItem = {
+          id,
+          familyId: state.family?.id ?? '',
+          label,
+          qty: qty ?? null,
+          checkedBy: null,
+          checkedAt: null,
+          createdBy: userId,
+          ts: new Date().toISOString(),
+        };
+        dispatch({ type: 'GROCERY_UPSERT', item });
+        if (token) addGroceryItem(token, { id, label, qty }).catch((err) => console.warn('[store] addGrocery failed', err));
+      },
+
+      toggleGrocery: (id: string) => {
+        const userId = state.session?.userId;
+        const current = state.grocery.find((g) => g.id === id);
+        if (current) {
+          const optimistic: ServerGroceryItem = current.checkedBy
+            ? { ...current, checkedBy: null, checkedAt: null }
+            : { ...current, checkedBy: userId ?? current.checkedBy, checkedAt: new Date().toISOString() };
+          dispatch({ type: 'GROCERY_UPSERT', item: optimistic });
+        }
+        if (token) toggleGroceryItem(token, id).catch((err) => console.warn('[store] toggleGrocery failed', err));
+      },
+
+      removeGrocery: (id: string) => {
+        dispatch({ type: 'GROCERY_REMOVE', id });
+        if (token) removeGroceryItem(token, id).catch((err) => console.warn('[store] removeGrocery failed', err));
+      },
+
+      clearCheckedGrocery: () => {
+        dispatch({ type: 'GROCERY_CLEAR_CHECKED' });
+        if (token) apiClearCheckedGrocery(token).catch((err) => console.warn('[store] clearCheckedGrocery failed', err));
+      },
+
+      // ── Shared Tasks ─────────────────────────────────────────
+
+      addTask: (input: { title: string; notes?: string; assigneeId?: string; dueDate?: string }) => {
+        const userId = state.session?.userId;
+        if (!userId) return;
+        const id = uid();
+        const task: ServerTask = {
+          id,
+          familyId: state.family?.id ?? '',
+          title: input.title,
+          notes: input.notes ?? null,
+          assigneeId: input.assigneeId ?? null,
+          dueDate: input.dueDate ?? null,
+          done: false,
+          doneBy: null,
+          doneAt: null,
+          createdBy: userId,
+          ts: new Date().toISOString(),
+        };
+        dispatch({ type: 'TASK_UPSERT', task });
+        if (token) {
+          addTaskItem(token, { id, title: input.title, notes: input.notes, assigneeId: input.assigneeId, dueDate: input.dueDate }).catch((err) =>
+            console.warn('[store] addTask failed', err),
+          );
+        }
+      },
+
+      toggleTask: (id: string) => {
+        const userId = state.session?.userId;
+        const current = state.tasks.find((t) => t.id === id);
+        if (current) {
+          const optimistic: ServerTask = current.done
+            ? { ...current, done: false, doneBy: null, doneAt: null }
+            : { ...current, done: true, doneBy: userId ?? current.doneBy, doneAt: new Date().toISOString() };
+          dispatch({ type: 'TASK_UPSERT', task: optimistic });
+        }
+        if (token) toggleTaskItem(token, id).catch((err) => console.warn('[store] toggleTask failed', err));
+      },
+
+      updateTask: (id: string, patch: TaskPatch) => {
+        const current = state.tasks.find((t) => t.id === id);
+        if (current) {
+          dispatch({
+            type: 'TASK_UPSERT',
+            task: {
+              ...current,
+              ...(patch.title !== undefined ? { title: patch.title } : {}),
+              ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+              ...(patch.assigneeId !== undefined ? { assigneeId: patch.assigneeId } : {}),
+              ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : {}),
+            },
+          });
+        }
+        if (token) updateTaskItem(token, id, patch).catch((err) => console.warn('[store] updateTask failed', err));
+      },
+
+      removeTask: (id: string) => {
+        dispatch({ type: 'TASK_REMOVE', id });
+        if (token) removeTaskItem(token, id).catch((err) => console.warn('[store] removeTask failed', err));
+      },
+
       /** Log in an existing user, persist the token, and hydrate family state. */
       login: async (username: string, password: string) => {
         const { token: newToken, user } = await authLogin({ username, password });
@@ -503,7 +671,7 @@ export function useActions() {
         dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
       },
     }),
-    [dispatch, token, state.session, state.messages],
+    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks],
   );
 }
 
@@ -614,4 +782,37 @@ export function useFamily(): FamilyState | null {
  * use this to avoid flashing the login screen while that check is in flight. */
 export function useSessionReady(): boolean {
   return useCtx().state.sessionReady;
+}
+
+/** The shared grocery list, sorted unchecked-first then by creation order. */
+export function useGrocery(): ServerGroceryItem[] {
+  const { state } = useCtx();
+  return useMemo(
+    () =>
+      [...state.grocery].sort((a, b) => {
+        const aChecked = a.checkedBy ? 1 : 0;
+        const bChecked = b.checkedBy ? 1 : 0;
+        if (aChecked !== bChecked) return aChecked - bChecked; // unchecked first
+        return Date.parse(a.ts) - Date.parse(b.ts);
+      }),
+    [state.grocery],
+  );
+}
+
+/** The shared task list, sorted open-first then by due date (nulls last) then creation order. */
+export function useTasks(): ServerTask[] {
+  const { state } = useCtx();
+  return useMemo(
+    () =>
+      [...state.tasks].sort((a, b) => {
+        const aDone = a.done ? 1 : 0;
+        const bDone = b.done ? 1 : 0;
+        if (aDone !== bDone) return aDone - bDone; // open first
+        const aDue = a.dueDate ? Date.parse(a.dueDate) : Infinity;
+        const bDue = b.dueDate ? Date.parse(b.dueDate) : Infinity;
+        if (aDue !== bDue) return aDue - bDue; // due date asc, nulls last
+        return Date.parse(a.ts) - Date.parse(b.ts);
+      }),
+    [state.tasks],
+  );
 }

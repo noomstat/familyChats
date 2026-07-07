@@ -2,12 +2,23 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { getFocusedRouteNameFromRoute, RouteProp } from '@react-navigation/native';
-import { MessageCircle, Map as MapIcon, User } from 'lucide-react-native';
+import { MessageCircle, Map as MapIcon, User, Home } from 'lucide-react-native';
 import { semantic, fontFamily } from '../theme';
-import { ChatListScreen, ThreadScreen, NewChatScreen, MapScreen, YouScreen, ExpensesScreen } from '../screens';
-import type { ChatsStackParamList, RootTabParamList } from './types';
+import {
+  ChatListScreen,
+  ThreadScreen,
+  NewChatScreen,
+  MapScreen,
+  YouScreen,
+  ExpensesScreen,
+  FamilyHubScreen,
+  GroceryScreen,
+  TasksScreen,
+} from '../screens';
+import type { ChatsStackParamList, FamilyStackParamList, RootTabParamList } from './types';
 
 const ChatsStack = createNativeStackNavigator<ChatsStackParamList>();
+const FamilyStack = createNativeStackNavigator<FamilyStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
 // Thread, Expenses & NewChat have their own full-bleed headers/back buttons
@@ -31,6 +42,18 @@ function ChatsNavigator() {
   );
 }
 
+// FamilyHub, Grocery, and Tasks all keep the tab bar visible (unlike Thread/
+// Expenses/NewChat in the Chats stack) — no per-route tabBarStyle override needed.
+function FamilyNavigator() {
+  return (
+    <FamilyStack.Navigator screenOptions={{ headerShown: false }}>
+      <FamilyStack.Screen name="FamilyHub" component={FamilyHubScreen} />
+      <FamilyStack.Screen name="Grocery" component={GroceryScreen} />
+      <FamilyStack.Screen name="Tasks" component={TasksScreen} />
+    </FamilyStack.Navigator>
+  );
+}
+
 export function RootNavigator() {
   return (
     <Tab.Navigator
@@ -50,6 +73,11 @@ export function RootNavigator() {
           tabBarIcon: ({ color, size }) => <MessageCircle color={color} size={size} />,
           tabBarStyle: chatsTabBarStyle(route),
         })}
+      />
+      <Tab.Screen
+        name="Family"
+        component={FamilyNavigator}
+        options={{ tabBarLabel: 'Family', tabBarIcon: ({ color, size }) => <Home color={color} size={size} /> }}
       />
       <Tab.Screen
         name="Map"

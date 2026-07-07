@@ -146,12 +146,16 @@ export interface BootstrapGroup extends ServerGroup {
 
 export interface BootstrapResponse {
   groups: BootstrapGroup[];
+  grocery: ServerGroceryItem[];
+  tasks: ServerTask[];
   serverTime: string;
 }
 
 export interface SyncResponse {
   messages: ServerMessage[];
   reads: { groupId: string; userId: string; lastReadTs: string }[];
+  grocery: ServerGroceryItem[];
+  tasks: ServerTask[];
   serverTime: string;
 }
 
@@ -197,6 +201,87 @@ export function addGroupMember(token: string, groupId: string, userId: string) {
 
 export function removeGroupMember(token: string, groupId: string, userId: string) {
   return api<{ group: ServerGroup }>(`/groups/${groupId}/members/${userId}`, { method: 'DELETE', token });
+}
+
+// ── Shared Grocery List ──────────────────────────────────────
+
+export interface ServerGroceryItem {
+  id: string;
+  familyId: string;
+  label: string;
+  qty: string | null;
+  checkedBy: string | null;
+  /** ISO 8601 timestamp, or null while unchecked. */
+  checkedAt: string | null;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export function getGrocery(token: string) {
+  return api<{ items: ServerGroceryItem[] }>('/grocery', { token });
+}
+
+export function addGroceryItem(token: string, input: { id: string; label: string; qty?: string }) {
+  return api<{ item: ServerGroceryItem }>('/grocery', { method: 'POST', body: input, token });
+}
+
+export function toggleGroceryItem(token: string, id: string) {
+  return api<{ item: ServerGroceryItem }>(`/grocery/${id}/toggle`, { method: 'POST', token });
+}
+
+export function removeGroceryItem(token: string, id: string) {
+  return api<{ id: string }>(`/grocery/${id}`, { method: 'DELETE', token });
+}
+
+export function clearCheckedGrocery(token: string) {
+  return api<{ ids: string[] }>('/grocery/clear-checked', { method: 'POST', token });
+}
+
+// ── Shared Tasks ─────────────────────────────────────────────
+
+export interface ServerTask {
+  id: string;
+  familyId: string;
+  title: string;
+  notes: string | null;
+  assigneeId: string | null;
+  /** 'YYYY-MM-DD', or null if no due date. */
+  dueDate: string | null;
+  done: boolean;
+  doneBy: string | null;
+  /** ISO 8601 timestamp, or null while open. */
+  doneAt: string | null;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export interface TaskPatch {
+  title?: string;
+  notes?: string | null;
+  assigneeId?: string | null;
+  dueDate?: string | null;
+}
+
+export function getTasks(token: string) {
+  return api<{ tasks: ServerTask[] }>('/tasks', { token });
+}
+
+export function addTaskItem(token: string, input: { id: string; title: string; notes?: string; assigneeId?: string; dueDate?: string }) {
+  return api<{ task: ServerTask }>('/tasks', { method: 'POST', body: input, token });
+}
+
+export function updateTaskItem(token: string, id: string, patch: TaskPatch) {
+  return api<{ task: ServerTask }>(`/tasks/${id}`, { method: 'PATCH', body: patch, token });
+}
+
+export function toggleTaskItem(token: string, id: string) {
+  return api<{ task: ServerTask }>(`/tasks/${id}/toggle`, { method: 'POST', token });
+}
+
+export function removeTaskItem(token: string, id: string) {
+  return api<{ id: string }>(`/tasks/${id}`, { method: 'DELETE', token });
 }
 
 // ── Realtime ─────────────────────────────────────────────────

@@ -6,3 +6,6 @@ export { YouScreen } from './YouScreen';
 export { ExpensesScreen } from './ExpensesScreen';
 export { LoginScreen } from './LoginScreen';
 export { FamilyGateScreen } from './FamilyGateScreen';
+export { FamilyHubScreen } from './FamilyHubScreen';
+export { GroceryScreen } from './GroceryScreen';
+export { TasksScreen } from './TasksScreen';

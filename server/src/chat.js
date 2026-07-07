@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { pool, query } from './db.js';
 import { broadcastToUsers, broadcastToFamily } from './ws.js';
 import { notifyUsers } from './notifications.js';
+import { listGrocery, listTasks } from './lists.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -77,7 +78,7 @@ function groupShape(group, members) {
  */
 export async function getBootstrap(userId) {
   const familyId = await userFamilyId(userId);
-  if (!familyId) return { groups: [], serverTime: new Date().toISOString() };
+  if (!familyId) return { groups: [], grocery: [], tasks: [], serverTime: new Date().toISOString() };
 
   const { rows: groupRows } = await query(
     `SELECT g.id, g.family_id, g.name
@@ -121,21 +122,33 @@ export async function getBootstrap(userId) {
     });
   }
 
-  return { groups, serverTime: new Date().toISOString() };
+  const grocery = await listGrocery(userId);
+  const tasks = await listTasks(userId);
+
+  return { groups, grocery, tasks, serverTime: new Date().toISOString() };
 }
 
-/** WS-reconnect catch-up: everything new across all my groups since `afterIso`. */
+/**
+ * WS-reconnect catch-up: everything new across all my groups since `afterIso`,
+ * plus grocery/tasks. Unlike messages/reads (which are filtered by `after`),
+ * grocery items and tasks are family-scale (a handful to a few dozen rows) so
+ * the simplest-correct choice is to just resend the full current list on every
+ * sync rather than track per-row change timestamps/tombstones for deletes.
+ */
 export async function getSyncSince(userId, afterIso) {
   const serverTime = new Date().toISOString();
   const after = new Date(afterIso);
   if (Number.isNaN(after.getTime())) throw badRequest('after must be a valid ISO timestamp');
+
+  const grocery = await listGrocery(userId);
+  const tasks = await listTasks(userId);
 
   const { rows: groupRows } = await query(
     'SELECT group_id FROM group_members WHERE user_id = $1',
     [userId],
   );
   const groupIds = groupRows.map((r) => r.group_id);
-  if (!groupIds.length) return { messages: [], reads: [], serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], grocery, tasks, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -149,6 +162,8 @@ export async function getSyncSince(userId, afterIso) {
   return {
     messages: msgRows.map(mapMessage),
     reads: readRows.map((r) => ({ groupId: r.group_id, userId: r.user_id, lastReadTs: r.last_read_ts.toISOString() })),
+    grocery,
+    tasks,
     serverTime,
   };
 }

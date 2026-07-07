@@ -18,6 +18,18 @@ import {
   addMember,
   removeMember,
 } from './src/chat.js';
+import {
+  listGrocery,
+  addGrocery,
+  toggleGrocery,
+  removeGrocery,
+  clearChecked,
+  listTasks,
+  addTask,
+  updateTask,
+  toggleTask,
+  removeTask,
+} from './src/lists.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -208,6 +220,103 @@ app.delete('/groups/:id/members/:userId', requireAuth, async (req, res, next) =>
   try {
     const group = await removeMember({ groupId: req.params.id, actorId: req.user.id, userId: req.params.userId });
     res.json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Shared Grocery List ──────────────────────────────────────
+
+app.get('/grocery', requireAuth, async (req, res, next) => {
+  try {
+    const items = await listGrocery(req.user.id);
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/grocery', requireAuth, async (req, res, next) => {
+  try {
+    const { id, label, qty } = req.body ?? {};
+    const item = await addGrocery({ id, label, qty, userId: req.user.id });
+    res.status(201).json({ item });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/grocery/:id/toggle', requireAuth, async (req, res, next) => {
+  try {
+    const item = await toggleGrocery({ id: req.params.id, userId: req.user.id });
+    res.json({ item });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/grocery/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeGrocery({ id: req.params.id, userId: req.user.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/grocery/clear-checked', requireAuth, async (req, res, next) => {
+  try {
+    const result = await clearChecked(req.user.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Shared Tasks ─────────────────────────────────────────────
+
+app.get('/tasks', requireAuth, async (req, res, next) => {
+  try {
+    const tasks = await listTasks(req.user.id);
+    res.json({ tasks });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/tasks', requireAuth, async (req, res, next) => {
+  try {
+    const { id, title, notes, assigneeId, dueDate } = req.body ?? {};
+    const task = await addTask({ id, title, notes, assigneeId, dueDate, userId: req.user.id });
+    res.status(201).json({ task });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/tasks/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { title, notes, assigneeId, dueDate } = req.body ?? {};
+    const task = await updateTask({ id: req.params.id, patch: { title, notes, assigneeId, dueDate }, userId: req.user.id });
+    res.json({ task });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/tasks/:id/toggle', requireAuth, async (req, res, next) => {
+  try {
+    const task = await toggleTask({ id: req.params.id, userId: req.user.id });
+    res.json({ task });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/tasks/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeTask({ id: req.params.id, userId: req.user.id });
+    res.json(result);
   } catch (err) {
     next(err);
   }

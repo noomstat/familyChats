@@ -32,6 +32,17 @@ import {
   Lock,
   LogOut,
   Settings,
+  Home,
+  Calendar,
+  ListTodo,
+  ShoppingCart,
+  Image,
+  Sparkles,
+  History,
+  PlusCircle,
+  Circle,
+  Trash2,
+  Check,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -72,6 +83,17 @@ const REGISTRY: Record<string, LucideIcon> = {
   lock: Lock,
   'log-out': LogOut,
   settings: Settings,
+  home: Home,
+  calendar: Calendar,
+  'list-todo': ListTodo,
+  'shopping-cart': ShoppingCart,
+  image: Image,
+  sparkles: Sparkles,
+  history: History,
+  'plus-circle': PlusCircle,
+  circle: Circle,
+  trash: Trash2,
+  check: Check,
 };
 
 export type IconName = keyof typeof REGISTRY;
