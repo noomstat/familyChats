@@ -49,6 +49,18 @@ import { getTimeline } from './src/timeline.js';
 await getBoss(); // ensure queues exist so producer sends succeed
 
 const app = express();
+
+// CORS — the web build runs on a different origin (e.g. localhost:8081) than
+// this API. Auth is Bearer-token (no cookies), so a permissive wildcard is
+// fine for v1; tighten to an origin allowlist when deploying for real.
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
+
 app.use(express.json());
 
 // Uploaded files (photos now, voice messages in Phase F). Public read is
