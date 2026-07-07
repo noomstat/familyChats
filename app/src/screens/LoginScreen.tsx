@@ -16,6 +16,7 @@ export function LoginScreen() {
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -51,9 +52,10 @@ export function LoginScreen() {
 
           <View style={{ gap: space[3] }}>
             {mode === 'register' && (
-              <Input value={name} onChangeText={setName} placeholder="Your name" leading={<Icon name="user" size={18} color={semantic.textMuted} />} />
+              <Input key="name" value={name} onChangeText={setName} placeholder="Your name" leading={<Icon name="user" size={18} color={semantic.textMuted} />} />
             )}
             <Input
+              key="username"
               value={username}
               onChangeText={setUsername}
               placeholder="Username"
@@ -65,19 +67,27 @@ export function LoginScreen() {
               leading={<Icon name="user" size={18} color={semantic.textMuted} />}
             />
             <Input
+              key="password"
               value={password}
               onChangeText={setPassword}
               placeholder="Password"
-              secureTextEntry
+              secureTextEntry={!showPw}
               autoCapitalize="none"
               autoCorrect={false}
               autoComplete="off"
               // iOS pushes its Password AutoFill / "Automatic Strong Password"
               // overlay onto secure fields, which blocks manual typing in Expo
-              // Go. 'oneTimeCode' is the standard workaround to suppress it.
+              // Go. 'oneTimeCode' is the standard workaround to suppress it,
+              // and the eye toggle (secureTextEntry off) bypasses secure-field
+              // quirks entirely as a fallback.
               textContentType={Platform.OS === 'ios' ? 'oneTimeCode' : 'none'}
               returnKeyType="go"
               leading={<Icon name="lock" size={18} color={semantic.textMuted} />}
+              trailing={
+                <Pressable onPress={() => setShowPw((v) => !v)} hitSlop={10} accessibilityLabel={showPw ? 'Hide password' : 'Show password'}>
+                  <Icon name={showPw ? 'eye-off' : 'eye'} size={18} color={semantic.textMuted} />
+                </Pressable>
+              }
               onSubmitEditing={submit}
             />
           </View>
