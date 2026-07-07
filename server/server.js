@@ -195,6 +195,46 @@ app.post('/groups/:id/messages', requireAuth, async (req, res, next) => {
   }
 });
 
+// Multipart: field `file` (the audio clip) + text fields `id` (client message
+// id) and `durationMs`. Reuses the same upload infra as photo uploads
+// (src/uploads.js), which already allowlists both image and audio mimes for
+// multer's own filter — this route additionally rejects anything that isn't
+// audio/* (e.g. someone posting a photo here), since that allowlist is shared
+// across both media routes. The file is already on disk when the handler
+// runs; on any failure (bad mime, not a member, duplicate id) it's unlinked
+// so failed/duplicate uploads don't leak orphan files.
+app.post('/groups/:id/voice', requireAuth, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file is required' });
+    if (!req.file.mimetype.startsWith('audio/')) {
+      await unlink(req.file.path).catch(() => {});
+      return res.status(400).json({ error: `expected an audio file, got ${req.file.mimetype}` });
+    }
+
+    const { id, durationMs } = req.body ?? {};
+    const mediaPath = `/uploads/${req.file.filename}`;
+    const message = await createMessage({
+      id,
+      groupId: req.params.id,
+      authorId: req.user.id,
+      kind: 'voice',
+      mediaPath,
+      durationMs: Number(durationMs) || null,
+    });
+
+    // A duplicate `id` (client retry) returns the already-stored row untouched
+    // — this upload's file was never referenced by it, so it's an orphan.
+    if (!message || message.mediaPath !== mediaPath) {
+      await unlink(req.file.path).catch(() => {});
+    }
+
+    res.status(201).json({ message });
+  } catch (err) {
+    if (req.file) await unlink(req.file.path).catch(() => {});
+    next(err);
+  }
+});
+
 app.post('/groups/:id/read', requireAuth, async (req, res, next) => {
   try {
     const { ts } = req.body ?? {};

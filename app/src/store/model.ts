@@ -45,6 +45,11 @@ export interface Message {
   text?: string;
   live?: boolean;
   loc?: { label: string; meta?: string };
+  /** Voice messages only: '/uploads/<name>' once uploaded, or a local file:/blob:/data: uri
+   * right after recording (before the upload round-trip replaces it with the server path). */
+  mediaPath?: string;
+  /** Voice messages only: clip length in ms. */
+  durationMs?: number;
   ts: number;
 }
 

@@ -209,8 +209,12 @@ export async function getMessages(groupId, userId, { before, limit = DEFAULT_MES
  * `message` WS event to every group member and enqueues a push to everyone
  * except the author. A duplicate id (client retry) is a silent no-op that
  * returns the already-stored row.
+ *
+ * `mediaPath`/`durationMs` are for `kind: 'voice'` (Phase F) — a public
+ * '/uploads/<name>' path and the clip length in ms. Both are simply columns
+ * that ride along; text/loc messages pass them as null.
  */
-export async function createMessage({ id, groupId, authorId, kind = 'text', body, loc, live }) {
+export async function createMessage({ id, groupId, authorId, kind = 'text', body, loc, live, mediaPath, durationMs }) {
   if (!id) throw badRequest('id is required');
   const group = await assertMember(groupId, authorId);
   if (!['text', 'loc', 'voice'].includes(kind)) throw badRequest('invalid kind');
@@ -218,11 +222,11 @@ export async function createMessage({ id, groupId, authorId, kind = 'text', body
   const storedLoc = loc ? { ...loc, ...(live ? { live: true } : {}) } : null;
 
   const { rows } = await query(
-    `INSERT INTO messages (id, group_id, author_id, kind, body, loc)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO messages (id, group_id, author_id, kind, body, loc, media_path, duration_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (id) DO NOTHING
      RETURNING *`,
-    [id, groupId, authorId, kind, body ?? null, storedLoc ? JSON.stringify(storedLoc) : null],
+    [id, groupId, authorId, kind, body ?? null, storedLoc ? JSON.stringify(storedLoc) : null, mediaPath ?? null, durationMs ?? null],
   );
 
   if (!rows[0]) {
@@ -239,10 +243,11 @@ export async function createMessage({ id, groupId, authorId, kind = 'text', body
   if (recipients.length) {
     const { rows: authorRows } = await query('SELECT name FROM users WHERE id = $1', [authorId]);
     const authorName = authorRows[0]?.name ?? 'Someone';
+    const preview = kind === 'voice' ? '🎤 Voice message' : (body || '📍 shared a location');
     await notifyUsers({
       userIds: recipients,
       title: group.name,
-      body: `${authorName}: ${body || '📍 shared a location'}`,
+      body: `${authorName}: ${preview}`,
       data: { type: 'message', groupId },
     });
   }

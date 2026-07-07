@@ -59,6 +59,7 @@ import {
   updateEventItem,
   updateTaskItem,
   uploadPhoto,
+  uploadVoice,
 } from '../api/client';
 
 const STORAGE_KEY = 'familychats:store:v1';
@@ -165,6 +166,8 @@ export function fromServerMessage(sm: ServerMessage): Message {
     text: sm.body ?? undefined,
     loc: sm.loc ? { label: sm.loc.label, meta: sm.loc.meta } : undefined,
     live: sm.loc?.live,
+    mediaPath: sm.mediaPath ?? undefined,
+    durationMs: sm.durationMs ?? undefined,
     ts: Date.parse(sm.ts),
   };
 }
@@ -267,6 +270,11 @@ function reducer(state: AppState, action: Action): AppState {
     }
 
     case 'MERGE_MESSAGES': {
+      // Upsert by id: a brand-new id is appended (and bumps unread, if not
+      // mine); a matching id is merged into the existing row in place. The
+      // latter is what lets a voice message's optimistic local mediaPath
+      // (a file:/blob: uri) get overwritten with the server's '/uploads/…'
+      // path once the upload round-trip resolves, same `id` throughout.
       const myId = state.session?.userId;
       let messages = state.messages;
       let unread = state.unread;
@@ -277,12 +285,26 @@ function reducer(state: AppState, action: Action): AppState {
       }
       for (const [groupId, incoming] of byGroup) {
         const existing = messages[groupId] ?? [];
-        const existingIds = new Set(existing.map((m) => m.id));
-        const fresh = incoming.filter((m) => !existingIds.has(m.id));
-        if (!fresh.length) continue;
-        const merged = [...existing, ...fresh].sort((a, b) => a.ts - b.ts);
-        messages = { ...messages, [groupId]: merged };
-        const bump = fresh.filter((m) => m.authorId !== myId).length;
+        const indexById = new Map(existing.map((m, i) => [m.id, i]));
+        let next = existing;
+        let changed = false;
+        let bump = 0;
+        for (const m of incoming) {
+          const idx = indexById.get(m.id);
+          if (idx === undefined) {
+            if (next === existing) next = [...existing];
+            indexById.set(m.id, next.length);
+            next.push(m);
+            changed = true;
+            if (m.authorId !== myId) bump += 1;
+          } else if (next[idx] !== m) {
+            if (next === existing) next = [...existing];
+            next[idx] = { ...next[idx], ...m };
+            changed = true;
+          }
+        }
+        if (!changed) continue;
+        messages = { ...messages, [groupId]: [...next].sort((a, b) => a.ts - b.ts) };
         if (bump) unread = { ...unread, [groupId]: (unread[groupId] ?? 0) + bump };
       }
       return { ...state, messages, unread };
@@ -599,6 +621,26 @@ export function useActions() {
         if (token) {
           postMessage(token, groupId, { id, kind: 'loc', loc, live }).catch((err) => console.warn('[store] sendLocation failed', err));
         }
+      },
+
+      /**
+       * Optimistically posts a recorded clip as a voice message (local uri as
+       * its mediaPath so the sender can play it back immediately), then
+       * uploads it. On success, MERGE_MESSAGES upserts the same id with the
+       * server row — its '/uploads/…' mediaPath wins. On failure, the
+       * message simply stays local-only (playable by the sender, never seen
+       * by anyone else) — mirrors every other action's fire-and-warn pattern.
+       */
+      sendVoice: (groupId: string, input: { uri: string; durationMs: number; mimeType: string; name: string }) => {
+        const authorId = state.session?.userId;
+        if (!authorId) return;
+        const id = uid();
+        const msg: Message = { id, groupId, authorId, kind: 'voice', mediaPath: input.uri, durationMs: input.durationMs, ts: Date.now() };
+        dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
+        if (!token) return;
+        uploadVoice(token, groupId, { uri: input.uri, name: input.name, mimeType: input.mimeType, id, durationMs: input.durationMs })
+          .then(({ message }) => dispatch({ type: 'MERGE_MESSAGES', messages: [fromServerMessage(message)] }))
+          .catch((err) => console.warn('[store] sendVoice failed', err));
       },
 
       startLive: (groupId: string, expiresLabel: string) => dispatch({ type: 'START_LIVE', groupId, expiresLabel }),

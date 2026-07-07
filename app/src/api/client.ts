@@ -466,6 +466,21 @@ export function removePhotoItem(token: string, id: string) {
   return api<{ id: string; albumId: string }>(`/photos/${id}`, { method: 'DELETE', token });
 }
 
+// ── Voice messages (Phase F) ─────────────────────────────────
+
+/** Multipart upload of one recorded clip as a group message. Client id + duration ride along as text fields. */
+export function uploadVoice(
+  token: string,
+  groupId: string,
+  input: UploadFile & { id: string; durationMs?: number },
+) {
+  const { uri, name, mimeType, id, durationMs } = input;
+  return uploadFile<{ message: ServerMessage }>(token, `/groups/${groupId}/voice`, { uri, name, mimeType }, {
+    id,
+    durationMs: durationMs != null ? String(durationMs) : undefined,
+  });
+}
+
 // ── Realtime ─────────────────────────────────────────────────
 
 /** ws(s) URL for the realtime hub, carrying the session token as a query param. */

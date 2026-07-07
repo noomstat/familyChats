@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -6,9 +6,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, radius, shadow } from '../theme';
 import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { PresenceDot } from '../components/chat';
-import { ChatBubble } from '../components/chat';
+import { PresenceDot, ChatBubble, VoiceBubble } from '../components/chat';
 import { LocationTile, LivePill } from '../components/location';
+import { cancelRecording, fileInfoFromUri, requestPermissions, startRecording, stopRecording } from '../audio/voiceRecorder';
 import {
   ChatGroup,
   Group,
@@ -23,6 +23,14 @@ import {
 } from '../store';
 import type { FamilyMember } from '../api/client';
 import type { ChatsStackParamList } from '../navigation/types';
+
+/** mm:ss for the in-progress recording bar's elapsed timer. */
+function fmtElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Thread'>;
 
@@ -40,7 +48,22 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [sheet, setSheet] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [micWarning, setMicWarning] = useState<string | null>(null);
   const isFocusedRef = useRef(false);
+  // Guards start/stop against double-fire (e.g. a stray extra onPressOut) —
+  // React state updates are async, so a plain boolean ref is checked first.
+  const recordingRef = useRef(false);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopElapsedTimer = useCallback(() => {
+    if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => () => stopElapsedTimer(), [stopElapsedTimer]);
 
   const members = family?.members ?? [];
   const nameOf = useCallback((id: string) => members.find((m) => m.id === id)?.name ?? id, [members]);
@@ -89,6 +112,50 @@ export function ThreadScreen({ route, navigation }: Props) {
     setSheet(false);
     actions.startLive(group.id, dur === 'until stopped' ? 'Sharing until stopped' : dur + ' left');
     actions.sendLocation(group.id, 'Your live location', 'Sharing · ' + dur, true);
+  };
+
+  // Press-and-hold mic: onPressIn starts, onPressOut stops+sends. The mic
+  // IconButton itself stays mounted throughout (only its `variant`/label
+  // change) so the same Pressable keeps tracking the touch across the
+  // composer-row swap below.
+  const beginRecording = async () => {
+    if (recordingRef.current) return;
+    setMicWarning(null);
+    const granted = await requestPermissions();
+    if (!granted) {
+      setMicWarning('Microphone access is needed to record a voice message.');
+      return;
+    }
+    const started = await startRecording();
+    if (!started) {
+      setMicWarning('Could not start recording.');
+      return;
+    }
+    recordingRef.current = true;
+    setRecording(true);
+    setElapsedMs(0);
+    const startedAt = Date.now();
+    stopElapsedTimer();
+    elapsedTimerRef.current = setInterval(() => setElapsedMs(Date.now() - startedAt), 200);
+  };
+
+  const finishRecording = async () => {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    setRecording(false);
+    stopElapsedTimer();
+    const result = await stopRecording();
+    if (!result || result.durationMs < 500) return; // too short to be a deliberate message
+    const { name, mimeType } = fileInfoFromUri(result.uri);
+    actions.sendVoice(group.id, { uri: result.uri, durationMs: result.durationMs, mimeType, name });
+  };
+
+  const cancelRecordingPress = async () => {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    setRecording(false);
+    stopElapsedTimer();
+    await cancelRecording();
   };
 
   const loadEarlier = async () => {
@@ -158,21 +225,46 @@ export function ThreadScreen({ route, navigation }: Props) {
         />
 
         {/* composer */}
+        {micWarning && (
+          <Text style={{ fontSize: 12, color: colors.rose500, paddingHorizontal: 16, paddingTop: 6, backgroundColor: semantic.surfaceCard }}>
+            {micWarning}
+          </Text>
+        )}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 12, backgroundColor: semantic.surfaceCard, borderTopWidth: 1, borderTopColor: semantic.borderSubtle }}>
-          <IconButton name={sharing ? 'navigation' : 'map-pin'} variant={sharing ? 'live' : 'soft'} accessibilityLabel="Share location" onPress={() => setSheet(true)} />
-          <View style={{ flex: 1 }}>
-            <Input
-              value={draft}
-              onChangeText={setDraft}
-              placeholder="Message"
-              onSubmitEditing={send}
-              trailing={<Icon name="smile" size={19} color={semantic.textMuted} />}
-            />
-          </View>
-          {draft.trim() ? (
+          {recording ? (
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <PresenceDot state="live" size={9} />
+              <Text style={{ fontFamily: fontFamily.mono, fontSize: 15, color: semantic.textStrong }}>{fmtElapsed(elapsedMs)}</Text>
+              <Text style={{ fontSize: 13, color: semantic.textMuted }}>Recording…</Text>
+              <View style={{ flex: 1 }} />
+              <Button size="sm" variant="ghost" onPress={cancelRecordingPress}>
+                Cancel
+              </Button>
+            </View>
+          ) : (
+            <>
+              <IconButton name={sharing ? 'navigation' : 'map-pin'} variant={sharing ? 'live' : 'soft'} accessibilityLabel="Share location" onPress={() => setSheet(true)} />
+              <View style={{ flex: 1 }}>
+                <Input
+                  value={draft}
+                  onChangeText={setDraft}
+                  placeholder="Message"
+                  onSubmitEditing={send}
+                  trailing={<Icon name="smile" size={19} color={semantic.textMuted} />}
+                />
+              </View>
+            </>
+          )}
+          {draft.trim() && !recording ? (
             <IconButton name="send" variant="primary" accessibilityLabel="Send" onPress={send} />
           ) : (
-            <IconButton name="mic" variant="soft" accessibilityLabel="Voice" />
+            <IconButton
+              name="mic"
+              variant={recording ? 'live' : 'soft'}
+              accessibilityLabel={recording ? 'Release to send voice message' : 'Hold to record a voice message'}
+              onPressIn={beginRecording}
+              onPressOut={finishRecording}
+            />
           )}
         </View>
       </KeyboardAvoidingView>
@@ -193,11 +285,13 @@ export function ThreadScreen({ route, navigation }: Props) {
 function ChatMsg({ m, mine, authorName, read }: { m: Message; mine: boolean; authorName: string; read?: boolean }) {
   const attachment = m.loc ? (
     <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
+  ) : m.kind === 'voice' && m.mediaPath ? (
+    <VoiceBubble mediaPath={m.mediaPath} durationMs={m.durationMs} mine={mine} />
   ) : undefined;
   return (
     <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
       <ChatBubble mine={mine} author={mine ? undefined : authorName} attachment={attachment}>
-        {m.kind === 'voice' ? '🎤 Voice message' : m.text}
+        {m.kind === 'text' ? m.text : undefined}
       </ChatBubble>
       {mine && (
         <Text style={{ fontFamily: fontFamily.mono, fontSize: 10, marginTop: 2, marginRight: 8, color: read ? colors.coral500 : semantic.textFaint }}>

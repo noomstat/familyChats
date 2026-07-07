@@ -45,6 +45,8 @@ import {
   Check,
   Camera,
   Pencil,
+  Play,
+  Pause,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -98,6 +100,8 @@ const REGISTRY: Record<string, LucideIcon> = {
   check: Check,
   camera: Camera,
   pencil: Pencil,
+  play: Play,
+  pause: Pause,
 };
 
 export type IconName = keyof typeof REGISTRY;

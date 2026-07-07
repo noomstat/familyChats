@@ -12,6 +12,9 @@ export interface IconButtonProps {
   size?: IconButtonSize;
   disabled?: boolean;
   onPress?: () => void;
+  /** Fired alongside the built-in press animation — used for press-and-hold controls (e.g. voice record). */
+  onPressIn?: () => void;
+  onPressOut?: () => void;
   accessibilityLabel?: string;
   style?: StyleProp<ViewStyle>;
 }
@@ -34,6 +37,8 @@ export function IconButton({
   size = 'md',
   disabled = false,
   onPress,
+  onPressIn,
+  onPressOut,
   accessibilityLabel,
   style,
 }: IconButtonProps) {
@@ -42,8 +47,14 @@ export function IconButton({
   const v = VARIANTS[variant];
   const scale = useRef(new Animated.Value(1)).current;
 
-  const pressIn = () => Animated.spring(scale, { toValue: 0.92, useNativeDriver: true, speed: 40 }).start();
-  const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();
+  const pressIn = () => {
+    Animated.spring(scale, { toValue: 0.92, useNativeDriver: true, speed: 40 }).start();
+    onPressIn?.();
+  };
+  const pressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30 }).start();
+    onPressOut?.();
+  };
 
   return (
     <Animated.View style={{ transform: [{ scale }], opacity: disabled ? 0.45 : 1 }}>
