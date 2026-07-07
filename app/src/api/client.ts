@@ -466,6 +466,38 @@ export function removePhotoItem(token: string, id: string) {
   return api<{ id: string; albumId: string }>(`/photos/${id}`, { method: 'DELETE', token });
 }
 
+// ── AI: Chat Summary + AI Search (Phase G) ────────────────────
+
+export interface GroupSummaryResponse {
+  summary: string;
+  messageCount: number;
+}
+
+/** 4-6 bullet catch-up for the last ~100 messages in a group. Throws (with a friendly message) if AI isn't configured server-side. */
+export function getGroupSummary(token: string, groupId: string) {
+  return api<GroupSummaryResponse>(`/groups/${groupId}/summary`, { method: 'POST', token });
+}
+
+export interface AiHit {
+  type: 'message' | 'task' | 'event' | 'grocery' | 'photo' | 'album';
+  id: string;
+  label: string;
+  snippet: string;
+  /** ISO 8601 timestamp. */
+  ts: string;
+  /** Present only for `type: 'message'` hits — which group to open. */
+  groupId?: string;
+}
+
+export interface AiSearchResponse {
+  answer: string;
+  hits: AiHit[];
+}
+
+export function aiSearch(token: string, query: string) {
+  return api<AiSearchResponse>('/search', { method: 'POST', body: { query }, token });
+}
+
 // ── Voice messages (Phase F) ─────────────────────────────────
 
 /** Multipart upload of one recorded clip as a group message. Client id + duration ride along as text fields. */

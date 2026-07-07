@@ -20,8 +20,9 @@ interface HubTile {
   onPress?: () => void;
 }
 
-// Calendar, Grocery, Tasks & Albums are live as of Phase E; Memories/AI
-// Search are still to come (Phases H/G) — they render dimmed with a "Soon" badge.
+// Calendar, Grocery, Tasks & Albums are live as of Phase E, AI Search as of
+// Phase G; Memories is still to come (Phase H) — it renders dimmed with a
+// "Soon" badge.
 export function FamilyHubScreen({ navigation }: Props) {
   const family = useFamily();
   const grocery = useGrocery();
@@ -74,7 +75,15 @@ export function FamilyHubScreen({ navigation }: Props) {
       onPress: () => navigation.navigate('Albums'),
     },
     { key: 'memories', icon: 'history', label: 'Memories', subtitle: 'Moments over time', tint: colors.ink100, tintFg: colors.ink600 },
-    { key: 'ai-search', icon: 'sparkles', label: 'AI Search', subtitle: 'Ask anything', tint: colors.coral50, tintFg: colors.coral500 },
+    {
+      key: 'ai-search',
+      icon: 'sparkles',
+      label: 'AI Search',
+      subtitle: 'Ask anything',
+      tint: colors.coral50,
+      tintFg: colors.coral500,
+      onPress: () => navigation.navigate('AISearch'),
+    },
   ];
 
   return (

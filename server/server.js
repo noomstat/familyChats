@@ -43,6 +43,7 @@ import {
   addPhoto,
   removePhoto,
 } from './src/albums.js';
+import { summarizeGroup, searchFamily } from './src/ai.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -498,6 +499,24 @@ app.delete('/photos/:id', requireAuth, async (req, res, next) => {
   try {
     const result = await removePhoto({ id: req.params.id, userId: req.user.id });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── AI: Chat Summary + AI Search ──────────────────────────────
+
+app.post('/groups/:id/summary', requireAuth, async (req, res, next) => {
+  try {
+    res.json(await summarizeGroup(req.params.id, req.user.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/search', requireAuth, async (req, res, next) => {
+  try {
+    res.json(await searchFamily(req.body?.query, req.user.id));
   } catch (err) {
     next(err);
   }

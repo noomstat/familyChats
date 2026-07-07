@@ -21,6 +21,7 @@ import {
   useReadCursors,
   useSession,
 } from '../store';
+import { getGroupSummary } from '../api/client';
 import type { FamilyMember } from '../api/client';
 import type { ChatsStackParamList } from '../navigation/types';
 
@@ -47,6 +48,7 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [draft, setDraft] = useState('');
   const [sheet, setSheet] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -195,6 +197,7 @@ export function ThreadScreen({ route, navigation }: Props) {
             )}
           </View>
         </View>
+        <IconButton name="sparkles" variant="soft" accessibilityLabel="Catch me up" onPress={() => setSummaryOpen(true)} />
         <IconButton name="receipt" variant="soft" accessibilityLabel="Expenses" onPress={() => navigation.navigate('Expenses', { group: expensesGroup })} />
         <IconButton name="settings" variant="soft" accessibilityLabel="Group settings" onPress={() => setSettingsOpen(true)} />
         <IconButton name="map" variant="soft" accessibilityLabel="View map" />
@@ -270,6 +273,9 @@ export function ThreadScreen({ route, navigation }: Props) {
       </KeyboardAvoidingView>
 
       {sheet && <ShareSheet onClose={() => setSheet(false)} onConfirm={confirmShare} />}
+      {summaryOpen && session && (
+        <SummarySheet groupId={group.id} token={session.token} onClose={() => setSummaryOpen(false)} />
+      )}
       {settingsOpen && (
         <GroupSettingsSheet
           group={group}
@@ -329,6 +335,78 @@ function ShareSheet({ onClose, onConfirm }: { onClose: () => void; onConfirm: (d
             </Pressable>
           ))}
         </View>
+      </View>
+    </View>
+  );
+}
+
+/** "Catch me up" bottom sheet — fetches a 4-6 bullet summary of the last ~100 messages on open. */
+function SummarySheet({ groupId, token, onClose }: { groupId: string; token: string; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getGroupSummary(token, groupId)
+      .then((res) => {
+        if (!cancelled) setSummary(res.summary);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message.includes('not configured') ? "AI isn't set up yet." : message || 'Could not load the summary.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [groupId, token]);
+
+  const bullets = summary ? summary.split('\n').map((line) => line.trim()).filter(Boolean) : [];
+
+  return (
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.4)', justifyContent: 'flex-end' }}>
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <View style={{ backgroundColor: semantic.surfaceCard, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30, gap: 14, ...shadow.xl }}>
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Icon name="sparkles" size={20} color={colors.coral500} />
+          <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Catch me up</Text>
+        </View>
+
+        {loading ? (
+          <View style={{ paddingVertical: 28, alignItems: 'center' }}>
+            <ActivityIndicator color={colors.coral500} />
+          </View>
+        ) : error ? (
+          <View style={{ gap: 4, paddingVertical: 4 }}>
+            <Text style={{ fontSize: 14, color: semantic.textStrong }}>{error}</Text>
+            {error === "AI isn't set up yet." && (
+              <Text style={{ fontSize: 12, color: semantic.textFaint }}>Ask whoever runs the server to set ANTHROPIC_API_KEY.</Text>
+            )}
+          </View>
+        ) : (
+          <View style={{ gap: 8 }}>
+            {bullets.length ? (
+              bullets.map((line, i) => (
+                <Text key={i} style={{ fontSize: 14, lineHeight: 20, color: semantic.textBody }}>
+                  {line}
+                </Text>
+              ))
+            ) : (
+              <Text style={{ fontSize: 14, color: semantic.textMuted }}>Nothing to summarize yet.</Text>
+            )}
+          </View>
+        )}
+
+        <Button variant="ghost" onPress={onClose}>
+          Close
+        </Button>
       </View>
     </View>
   );

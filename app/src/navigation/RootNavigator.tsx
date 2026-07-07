@@ -17,6 +17,7 @@ import {
   TasksScreen,
   AlbumsScreen,
   AlbumScreen,
+  AISearchScreen,
 } from '../screens';
 import type { ChatsStackParamList, FamilyStackParamList, RootTabParamList } from './types';
 
@@ -57,6 +58,7 @@ function FamilyNavigator() {
       <FamilyStack.Screen name="Tasks" component={TasksScreen} />
       <FamilyStack.Screen name="Albums" component={AlbumsScreen} />
       <FamilyStack.Screen name="Album" component={AlbumScreen} />
+      <FamilyStack.Screen name="AISearch" component={AISearchScreen} />
     </FamilyStack.Navigator>
   );
 }
