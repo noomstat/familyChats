@@ -148,6 +148,7 @@ export interface BootstrapResponse {
   groups: BootstrapGroup[];
   grocery: ServerGroceryItem[];
   tasks: ServerTask[];
+  events: ServerEvent[];
   serverTime: string;
 }
 
@@ -156,6 +157,7 @@ export interface SyncResponse {
   reads: { groupId: string; userId: string; lastReadTs: string }[];
   grocery: ServerGroceryItem[];
   tasks: ServerTask[];
+  events: ServerEvent[];
   serverTime: string;
 }
 
@@ -282,6 +284,55 @@ export function toggleTaskItem(token: string, id: string) {
 
 export function removeTaskItem(token: string, id: string) {
   return api<{ id: string }>(`/tasks/${id}`, { method: 'DELETE', token });
+}
+
+// ── Shared Calendar ──────────────────────────────────────────
+
+export interface ServerEvent {
+  id: string;
+  familyId: string;
+  title: string;
+  notes: string | null;
+  /** ISO 8601 timestamp. */
+  startTs: string;
+  /** ISO 8601 timestamp, or null for a point-in-time event. */
+  endTs: string | null;
+  allDay: boolean;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export interface EventPatch {
+  title?: string;
+  notes?: string | null;
+  startTs?: string;
+  endTs?: string | null;
+  allDay?: boolean;
+}
+
+/** `from`/`to` are ISO timestamps; omit either to leave that side of the range open. */
+export function getEvents(token: string, opts: { from?: string; to?: string } = {}) {
+  const params = new URLSearchParams();
+  if (opts.from) params.set('from', opts.from);
+  if (opts.to) params.set('to', opts.to);
+  const qs = params.toString();
+  return api<{ events: ServerEvent[] }>(`/events${qs ? `?${qs}` : ''}`, { token });
+}
+
+export function addEventItem(
+  token: string,
+  input: { id: string; title: string; notes?: string; startTs: string; endTs?: string; allDay?: boolean },
+) {
+  return api<{ event: ServerEvent }>('/events', { method: 'POST', body: input, token });
+}
+
+export function updateEventItem(token: string, id: string, patch: EventPatch) {
+  return api<{ event: ServerEvent }>(`/events/${id}`, { method: 'PATCH', body: patch, token });
+}
+
+export function removeEventItem(token: string, id: string) {
+  return api<{ id: string }>(`/events/${id}`, { method: 'DELETE', token });
 }
 
 // ── Realtime ─────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, radius } from '../theme';
 import { Icon, Badge, Card } from '../components/core';
 import { PinMark } from '../components/brand/PinMark';
-import { useFamily, useGrocery, useTasks } from '../store';
+import { useEvents, useFamily, useGrocery, useTasks } from '../store';
 import type { FamilyStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'FamilyHub'>;
@@ -20,17 +20,31 @@ interface HubTile {
   onPress?: () => void;
 }
 
-// Grocery & Tasks are live in this phase; Calendar/Albums/Memories/AI Search
-// are still to come (Phases D/E/H/G) — they render dimmed with a "Soon" badge.
+// Calendar, Grocery & Tasks are live as of this phase; Albums/Memories/AI
+// Search are still to come (Phases E/H/G) — they render dimmed with a "Soon" badge.
 export function FamilyHubScreen({ navigation }: Props) {
   const family = useFamily();
   const grocery = useGrocery();
   const tasks = useTasks();
+  const events = useEvents();
   const unchecked = grocery.filter((g) => !g.checkedBy).length;
   const open = tasks.filter((t) => !t.done).length;
+  const now = new Date();
+  const monthCount = events.filter((e) => {
+    const d = new Date(e.startTs);
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }).length;
 
   const tiles: HubTile[] = [
-    { key: 'calendar', icon: 'calendar', label: 'Calendar', subtitle: 'Plans & events', tint: colors.sky100, tintFg: colors.sky500 },
+    {
+      key: 'calendar',
+      icon: 'calendar',
+      label: 'Calendar',
+      subtitle: `${monthCount} this month`,
+      tint: colors.sky100,
+      tintFg: colors.sky500,
+      onPress: () => navigation.navigate('Calendar'),
+    },
     {
       key: 'grocery',
       icon: 'shopping-cart',

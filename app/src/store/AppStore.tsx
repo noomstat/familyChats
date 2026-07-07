@@ -15,8 +15,10 @@ import {
 import { tokenStorage } from './tokenStorage';
 import {
   BootstrapResponse,
+  EventPatch,
   FamilyInfo,
   FamilyMember,
+  ServerEvent,
   ServerGroup,
   ServerGroceryItem,
   ServerMessage,
@@ -25,6 +27,7 @@ import {
   authLogin,
   authLogout,
   authRegister,
+  addEventItem,
   addGroupMember,
   addGroceryItem,
   addTaskItem,
@@ -37,12 +40,14 @@ import {
   joinFamily as apiJoinFamily,
   postMessage,
   postRead,
+  removeEventItem,
   removeGroupMember,
   removeGroceryItem,
   removeTaskItem,
   renameGroup as apiRenameGroup,
   toggleGroceryItem,
   toggleTaskItem,
+  updateEventItem,
   updateTaskItem,
 } from '../api/client';
 
@@ -96,6 +101,8 @@ export interface AppState {
   grocery: ServerGroceryItem[];
   /** Server-backed shared tasks, unsorted — see useTasks() for display order. */
   tasks: ServerTask[];
+  /** Server-backed shared calendar events, unsorted — see useEvents() for display order. */
+  events: ServerEvent[];
   /** True once we've attempted to load persisted state. */
   hydrated: boolean;
   /** The signed-in user, or null when logged out. Not persisted to AsyncStorage —
@@ -123,6 +130,7 @@ const seedState: AppState = {
   transfers: SEED_TRANSFERS,
   grocery: [],
   tasks: [],
+  events: [],
   hydrated: false,
   session: null,
   family: null,
@@ -171,6 +179,9 @@ type Action =
   | { type: 'TASK_SET'; tasks: ServerTask[] }
   | { type: 'TASK_UPSERT'; task: ServerTask }
   | { type: 'TASK_REMOVE'; id: string }
+  | { type: 'EVENT_SET'; events: ServerEvent[] }
+  | { type: 'EVENT_UPSERT'; event: ServerEvent }
+  | { type: 'EVENT_REMOVE'; id: string }
   | { type: 'SET_SESSION'; session: Session | null }
   | { type: 'SET_FAMILY'; family: FamilyState | null }
   | { type: 'SESSION_READY' }
@@ -221,6 +232,7 @@ function reducer(state: AppState, action: Action): AppState {
         hasMore,
         grocery: action.payload.grocery,
         tasks: action.payload.tasks,
+        events: action.payload.events,
         lastSync: action.payload.serverTime,
       };
     }
@@ -333,6 +345,20 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'TASK_REMOVE':
       return { ...state, tasks: state.tasks.filter((t) => t.id !== action.id) };
+
+    case 'EVENT_SET':
+      return { ...state, events: action.events };
+
+    case 'EVENT_UPSERT': {
+      const idx = state.events.findIndex((e) => e.id === action.event.id);
+      const events = idx >= 0
+        ? state.events.map((e, i) => (i === idx ? action.event : e))
+        : [...state.events, action.event];
+      return { ...state, events };
+    }
+
+    case 'EVENT_REMOVE':
+      return { ...state, events: state.events.filter((e) => e.id !== action.id) };
 
     case 'SET_SESSION':
       return { ...state, session: action.session };
@@ -626,6 +652,54 @@ export function useActions() {
         if (token) removeTaskItem(token, id).catch((err) => console.warn('[store] removeTask failed', err));
       },
 
+      // ── Shared Calendar ──────────────────────────────────────
+
+      addEvent: (input: { title: string; notes?: string; startTs: string; endTs?: string; allDay?: boolean }) => {
+        const userId = state.session?.userId;
+        if (!userId) return;
+        const id = uid();
+        const event: ServerEvent = {
+          id,
+          familyId: state.family?.id ?? '',
+          title: input.title,
+          notes: input.notes ?? null,
+          startTs: input.startTs,
+          endTs: input.endTs ?? null,
+          allDay: !!input.allDay,
+          createdBy: userId,
+          ts: new Date().toISOString(),
+        };
+        dispatch({ type: 'EVENT_UPSERT', event });
+        if (token) {
+          addEventItem(token, { id, title: input.title, notes: input.notes, startTs: input.startTs, endTs: input.endTs, allDay: input.allDay }).catch(
+            (err) => console.warn('[store] addEvent failed', err),
+          );
+        }
+      },
+
+      updateEvent: (id: string, patch: EventPatch) => {
+        const current = state.events.find((e) => e.id === id);
+        if (current) {
+          dispatch({
+            type: 'EVENT_UPSERT',
+            event: {
+              ...current,
+              ...(patch.title !== undefined ? { title: patch.title } : {}),
+              ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+              ...(patch.startTs !== undefined ? { startTs: patch.startTs } : {}),
+              ...(patch.endTs !== undefined ? { endTs: patch.endTs } : {}),
+              ...(patch.allDay !== undefined ? { allDay: patch.allDay } : {}),
+            },
+          });
+        }
+        if (token) updateEventItem(token, id, patch).catch((err) => console.warn('[store] updateEvent failed', err));
+      },
+
+      removeEvent: (id: string) => {
+        dispatch({ type: 'EVENT_REMOVE', id });
+        if (token) removeEventItem(token, id).catch((err) => console.warn('[store] removeEvent failed', err));
+      },
+
       /** Log in an existing user, persist the token, and hydrate family state. */
       login: async (username: string, password: string) => {
         const { token: newToken, user } = await authLogin({ username, password });
@@ -671,7 +745,7 @@ export function useActions() {
         dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
       },
     }),
-    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks],
+    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events],
   );
 }
 
@@ -815,4 +889,10 @@ export function useTasks(): ServerTask[] {
       }),
     [state.tasks],
   );
+}
+
+/** The shared calendar events, sorted by start time ascending. */
+export function useEvents(): ServerEvent[] {
+  const { state } = useCtx();
+  return useMemo(() => [...state.events].sort((a, b) => Date.parse(a.startTs) - Date.parse(b.startTs)), [state.events]);
 }

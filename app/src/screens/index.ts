@@ -7,5 +7,6 @@ export { ExpensesScreen } from './ExpensesScreen';
 export { LoginScreen } from './LoginScreen';
 export { FamilyGateScreen } from './FamilyGateScreen';
 export { FamilyHubScreen } from './FamilyHubScreen';
+export { CalendarScreen } from './CalendarScreen';
 export { GroceryScreen } from './GroceryScreen';
 export { TasksScreen } from './TasksScreen';

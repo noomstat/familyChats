@@ -12,6 +12,7 @@ import {
   YouScreen,
   ExpensesScreen,
   FamilyHubScreen,
+  CalendarScreen,
   GroceryScreen,
   TasksScreen,
 } from '../screens';
@@ -42,12 +43,14 @@ function ChatsNavigator() {
   );
 }
 
-// FamilyHub, Grocery, and Tasks all keep the tab bar visible (unlike Thread/
-// Expenses/NewChat in the Chats stack) — no per-route tabBarStyle override needed.
+// FamilyHub, Calendar, Grocery, and Tasks all keep the tab bar visible (unlike
+// Thread/Expenses/NewChat in the Chats stack) — no per-route tabBarStyle
+// override needed.
 function FamilyNavigator() {
   return (
     <FamilyStack.Navigator screenOptions={{ headerShown: false }}>
       <FamilyStack.Screen name="FamilyHub" component={FamilyHubScreen} />
+      <FamilyStack.Screen name="Calendar" component={CalendarScreen} />
       <FamilyStack.Screen name="Grocery" component={GroceryScreen} />
       <FamilyStack.Screen name="Tasks" component={TasksScreen} />
     </FamilyStack.Navigator>

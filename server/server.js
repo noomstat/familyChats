@@ -30,6 +30,7 @@ import {
   toggleTask,
   removeTask,
 } from './src/lists.js';
+import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -316,6 +317,47 @@ app.post('/tasks/:id/toggle', requireAuth, async (req, res, next) => {
 app.delete('/tasks/:id', requireAuth, async (req, res, next) => {
   try {
     const result = await removeTask({ id: req.params.id, userId: req.user.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Shared Calendar ──────────────────────────────────────────
+
+app.get('/events', requireAuth, async (req, res, next) => {
+  try {
+    const { from, to } = req.query;
+    const events = await listEvents(req.user.id, { from, to });
+    res.json({ events });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/events', requireAuth, async (req, res, next) => {
+  try {
+    const { id, title, notes, startTs, endTs, allDay } = req.body ?? {};
+    const event = await addEvent({ id, title, notes, startTs, endTs, allDay, userId: req.user.id });
+    res.status(201).json({ event });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/events/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { title, notes, startTs, endTs, allDay } = req.body ?? {};
+    const event = await updateEvent({ id: req.params.id, patch: { title, notes, startTs, endTs, allDay }, userId: req.user.id });
+    res.json({ event });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/events/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeEvent({ id: req.params.id, userId: req.user.id });
     res.json(result);
   } catch (err) {
     next(err);

@@ -19,6 +19,7 @@ export {
   useSessionReady,
   useGrocery,
   useTasks,
+  useEvents,
 } from './AppStore';
 export type { AppState, ChatRow, ChatGroup, Session, FamilyState } from './AppStore';
 export { useRealtime } from './useRealtime';

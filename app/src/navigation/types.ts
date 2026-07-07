@@ -13,10 +13,12 @@ export type ChatsStackParamList = {
 };
 
 // The Family hub tab: a Card grid linking to Calendar, Grocery, Tasks, Albums,
-// Memories, AI Search. Only Grocery/Tasks are wired up in this phase — the
-// rest render as "Soon" cards on FamilyHub until their phases land.
+// Memories, AI Search. Calendar/Grocery/Tasks are wired up as of Phase D —
+// Albums/Memories/AI Search still render as "Soon" cards on FamilyHub until
+// their phases land.
 export type FamilyStackParamList = {
   FamilyHub: undefined;
+  Calendar: undefined;
   Grocery: undefined;
   Tasks: undefined;
 };
