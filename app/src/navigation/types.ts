@@ -13,9 +13,7 @@ export type ChatsStackParamList = {
 };
 
 // The Family hub tab: a Card grid linking to Calendar, Grocery, Tasks, Albums,
-// Memories, AI Search. Calendar/Grocery/Tasks/Albums/AI Search are wired up
-// as of Phases E/G — Memories still renders as a "Soon" card on FamilyHub
-// until Phase H lands.
+// Memories, AI Search. All six are wired up as of Phase H.
 export type FamilyStackParamList = {
   FamilyHub: undefined;
   Calendar: undefined;
@@ -26,6 +24,7 @@ export type FamilyStackParamList = {
   // album from the store (rename/photoCount updates) once available.
   Album: { albumId: string; name: string };
   AISearch: undefined;
+  Memories: undefined;
 };
 
 export type RootTabParamList = {

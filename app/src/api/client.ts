@@ -513,6 +513,55 @@ export function uploadVoice(
   });
 }
 
+// ── Memory Timeline (Phase H) ─────────────────────────────────
+
+export type TimelineItem =
+  | {
+      type: 'photo';
+      id: string;
+      /** ISO 8601 timestamp. */
+      ts: string;
+      filePath: string;
+      caption: string | null;
+      uploaderName: string | null;
+      albumId: string;
+      albumName: string;
+    }
+  | {
+      type: 'event';
+      id: string;
+      /** ISO 8601 timestamp (== startTs). */
+      ts: string;
+      title: string;
+      allDay: boolean;
+      startTs: string;
+    }
+  | {
+      type: 'milestone';
+      id: string;
+      /** ISO 8601 timestamp. */
+      ts: string;
+      text: string;
+    };
+
+export interface TimelineMonth {
+  /** 'YYYY-MM'. */
+  month: string;
+  /** e.g. 'July 2026'. */
+  label: string;
+  items: TimelineItem[];
+}
+
+export interface TimelineResponse {
+  months: TimelineMonth[];
+  serverTime: string;
+}
+
+/** Not part of bootstrap/sync — fetched on-demand when the Memories screen opens (see server/src/timeline.js). */
+export function getTimeline(token: string) {
+  return api<TimelineResponse>('/timeline', { token });
+}
+
 // ── Realtime ─────────────────────────────────────────────────
 
 /** ws(s) URL for the realtime hub, carrying the session token as a query param. */

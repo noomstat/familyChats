@@ -44,6 +44,7 @@ import {
   removePhoto,
 } from './src/albums.js';
 import { summarizeGroup, searchFamily } from './src/ai.js';
+import { getTimeline } from './src/timeline.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -517,6 +518,18 @@ app.post('/groups/:id/summary', requireAuth, async (req, res, next) => {
 app.post('/search', requireAuth, async (req, res, next) => {
   try {
     res.json(await searchFamily(req.body?.query, req.user.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Memory Timeline ──────────────────────────────────────────
+
+// Not part of /bootstrap or /sync — see src/timeline.js's header comment for
+// why (derived, cheap to recompute, fetched only when the screen opens).
+app.get('/timeline', requireAuth, async (req, res, next) => {
+  try {
+    res.json(await getTimeline(req.user.id));
   } catch (err) {
     next(err);
   }

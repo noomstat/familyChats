@@ -21,8 +21,7 @@ interface HubTile {
 }
 
 // Calendar, Grocery, Tasks & Albums are live as of Phase E, AI Search as of
-// Phase G; Memories is still to come (Phase H) — it renders dimmed with a
-// "Soon" badge.
+// Phase G, Memories as of Phase H — every tile is live.
 export function FamilyHubScreen({ navigation }: Props) {
   const family = useFamily();
   const grocery = useGrocery();
@@ -74,7 +73,15 @@ export function FamilyHubScreen({ navigation }: Props) {
       tintFg: colors.amber500,
       onPress: () => navigation.navigate('Albums'),
     },
-    { key: 'memories', icon: 'history', label: 'Memories', subtitle: 'Moments over time', tint: colors.ink100, tintFg: colors.ink600 },
+    {
+      key: 'memories',
+      icon: 'history',
+      label: 'Memories',
+      subtitle: 'Your family story',
+      tint: colors.ink100,
+      tintFg: colors.ink600,
+      onPress: () => navigation.navigate('Memories'),
+    },
     {
       key: 'ai-search',
       icon: 'sparkles',
