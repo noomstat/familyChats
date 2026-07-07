@@ -15,6 +15,8 @@ import {
   CalendarScreen,
   GroceryScreen,
   TasksScreen,
+  AlbumsScreen,
+  AlbumScreen,
 } from '../screens';
 import type { ChatsStackParamList, FamilyStackParamList, RootTabParamList } from './types';
 
@@ -43,9 +45,9 @@ function ChatsNavigator() {
   );
 }
 
-// FamilyHub, Calendar, Grocery, and Tasks all keep the tab bar visible (unlike
-// Thread/Expenses/NewChat in the Chats stack) — no per-route tabBarStyle
-// override needed.
+// FamilyHub, Calendar, Grocery, Tasks, and the Albums screens all keep the
+// tab bar visible (unlike Thread/Expenses/NewChat in the Chats stack) — no
+// per-route tabBarStyle override needed.
 function FamilyNavigator() {
   return (
     <FamilyStack.Navigator screenOptions={{ headerShown: false }}>
@@ -53,6 +55,8 @@ function FamilyNavigator() {
       <FamilyStack.Screen name="Calendar" component={CalendarScreen} />
       <FamilyStack.Screen name="Grocery" component={GroceryScreen} />
       <FamilyStack.Screen name="Tasks" component={TasksScreen} />
+      <FamilyStack.Screen name="Albums" component={AlbumsScreen} />
+      <FamilyStack.Screen name="Album" component={AlbumScreen} />
     </FamilyStack.Navigator>
   );
 }

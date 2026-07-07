@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 import {
   CURRENT_USER,
   Expense,
@@ -18,10 +20,12 @@ import {
   EventPatch,
   FamilyInfo,
   FamilyMember,
+  ServerAlbum,
   ServerEvent,
   ServerGroup,
   ServerGroceryItem,
   ServerMessage,
+  ServerPhoto,
   ServerTask,
   TaskPatch,
   authLogin,
@@ -32,23 +36,29 @@ import {
   addGroceryItem,
   addTaskItem,
   clearCheckedGrocery as apiClearCheckedGrocery,
+  createAlbumItem,
   createFamily as apiCreateFamily,
   createGroup as apiCreateGroup,
+  getAlbumPhotos,
   getBootstrap,
   getGroupMessages,
   getMe,
   joinFamily as apiJoinFamily,
   postMessage,
   postRead,
+  removeAlbumItem,
   removeEventItem,
   removeGroupMember,
   removeGroceryItem,
+  removePhotoItem,
   removeTaskItem,
+  renameAlbumItem,
   renameGroup as apiRenameGroup,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
   updateTaskItem,
+  uploadPhoto,
 } from '../api/client';
 
 const STORAGE_KEY = 'familychats:store:v1';
@@ -103,6 +113,11 @@ export interface AppState {
   tasks: ServerTask[];
   /** Server-backed shared calendar events, unsorted — see useEvents() for display order. */
   events: ServerEvent[];
+  /** Server-backed shared photo albums (metadata + photoCount/coverPath), unsorted — see useAlbums(). */
+  albums: ServerAlbum[];
+  /** Photos per album, ascending by ts — loaded lazily via loadPhotos(); an
+   * absent key means "not loaded yet" (vs. an empty array = loaded, empty). */
+  photosByAlbum: Record<string, ServerPhoto[]>;
   /** True once we've attempted to load persisted state. */
   hydrated: boolean;
   /** The signed-in user, or null when logged out. Not persisted to AsyncStorage —
@@ -131,6 +146,8 @@ const seedState: AppState = {
   grocery: [],
   tasks: [],
   events: [],
+  albums: [],
+  photosByAlbum: {},
   hydrated: false,
   session: null,
   family: null,
@@ -182,6 +199,12 @@ type Action =
   | { type: 'EVENT_SET'; events: ServerEvent[] }
   | { type: 'EVENT_UPSERT'; event: ServerEvent }
   | { type: 'EVENT_REMOVE'; id: string }
+  | { type: 'ALBUM_SET'; albums: ServerAlbum[] }
+  | { type: 'ALBUM_UPSERT'; album: ServerAlbum }
+  | { type: 'ALBUM_REMOVE'; id: string }
+  | { type: 'PHOTOS_SET'; albumId: string; photos: ServerPhoto[] }
+  | { type: 'PHOTO_UPSERT'; photo: ServerPhoto }
+  | { type: 'PHOTO_REMOVE'; id: string; albumId: string }
   | { type: 'SET_SESSION'; session: Session | null }
   | { type: 'SET_FAMILY'; family: FamilyState | null }
   | { type: 'SESSION_READY' }
@@ -223,6 +246,10 @@ function reducer(state: AppState, action: Action): AppState {
         unread[g.id] = g.unread;
         hasMore[g.id] = g.latest.length >= 30;
       }
+      // Bootstrap carries album metadata but never photos — keep whatever
+      // photo lists we've already loaded, pruning albums that no longer exist.
+      const albumIds = new Set(action.payload.albums.map((a) => a.id));
+      const photosByAlbum = Object.fromEntries(Object.entries(state.photosByAlbum).filter(([id]) => albumIds.has(id)));
       return {
         ...state,
         groups,
@@ -233,6 +260,8 @@ function reducer(state: AppState, action: Action): AppState {
         grocery: action.payload.grocery,
         tasks: action.payload.tasks,
         events: action.payload.events,
+        albums: action.payload.albums,
+        photosByAlbum,
         lastSync: action.payload.serverTime,
       };
     }
@@ -359,6 +388,77 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'EVENT_REMOVE':
       return { ...state, events: state.events.filter((e) => e.id !== action.id) };
+
+    case 'ALBUM_SET': {
+      const albumIds = new Set(action.albums.map((a) => a.id));
+      const photosByAlbum = Object.fromEntries(Object.entries(state.photosByAlbum).filter(([id]) => albumIds.has(id)));
+      return { ...state, albums: action.albums, photosByAlbum };
+    }
+
+    case 'ALBUM_UPSERT': {
+      const idx = state.albums.findIndex((a) => a.id === action.album.id);
+      const albums = idx >= 0
+        ? state.albums.map((a, i) => (i === idx ? action.album : a))
+        : [...state.albums, action.album];
+      return { ...state, albums };
+    }
+
+    case 'ALBUM_REMOVE': {
+      const { [action.id]: _photos, ...photosByAlbum } = state.photosByAlbum;
+      return { ...state, albums: state.albums.filter((a) => a.id !== action.id), photosByAlbum };
+    }
+
+    case 'PHOTOS_SET': {
+      // A fresh full fetch is authoritative — also true up the album's
+      // photoCount/coverPath in case WS events were missed while offline.
+      const last = action.photos[action.photos.length - 1];
+      const albums = state.albums.map((a) =>
+        a.id === action.albumId ? { ...a, photoCount: action.photos.length, coverPath: last ? last.filePath : null } : a,
+      );
+      return { ...state, albums, photosByAlbum: { ...state.photosByAlbum, [action.albumId]: action.photos } };
+    }
+
+    case 'PHOTO_UPSERT': {
+      const albumId = action.photo.albumId;
+      const list = state.photosByAlbum[albumId];
+      let photosByAlbum = state.photosByAlbum;
+      let isNew = true;
+      if (list) {
+        const idx = list.findIndex((p) => p.id === action.photo.id);
+        isNew = idx < 0;
+        const merged = isNew
+          ? [...list, action.photo].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
+          : list.map((p, i) => (i === idx ? action.photo : p));
+        photosByAlbum = { ...photosByAlbum, [albumId]: merged };
+      }
+      // A fresh photo bumps the album's count and becomes its cover (it's the
+      // latest in practice); an update (same id) leaves the aggregates alone.
+      const albums = isNew
+        ? state.albums.map((a) => (a.id === albumId ? { ...a, photoCount: a.photoCount + 1, coverPath: action.photo.filePath } : a))
+        : state.albums;
+      return { ...state, albums, photosByAlbum };
+    }
+
+    case 'PHOTO_REMOVE': {
+      const list = state.photosByAlbum[action.albumId];
+      let photosByAlbum = state.photosByAlbum;
+      let nextList: ServerPhoto[] | undefined;
+      let removed = true;
+      if (list) {
+        removed = list.some((p) => p.id === action.id);
+        nextList = list.filter((p) => p.id !== action.id);
+        photosByAlbum = { ...photosByAlbum, [action.albumId]: nextList };
+      }
+      const albums = state.albums.map((a) => {
+        if (a.id !== action.albumId) return a;
+        const photoCount = Math.max(0, a.photoCount - (removed ? 1 : 0));
+        // With the list loaded we can recompute the cover exactly; otherwise
+        // it may go stale until the next sync/loadPhotos trues it up.
+        const coverPath = nextList ? nextList[nextList.length - 1]?.filePath ?? null : photoCount === 0 ? null : a.coverPath;
+        return { ...a, photoCount, coverPath };
+      });
+      return { ...state, albums, photosByAlbum };
+    }
 
     case 'SET_SESSION':
       return { ...state, session: action.session };
@@ -700,6 +800,82 @@ export function useActions() {
         if (token) removeEventItem(token, id).catch((err) => console.warn('[store] removeEvent failed', err));
       },
 
+      // ── Shared Photo Albums ──────────────────────────────────
+
+      /** Optimistically creates an album and returns its (client-generated) id. */
+      createAlbum: async (name: string): Promise<string> => {
+        const userId = state.session?.userId;
+        if (!userId) throw new Error('not signed in');
+        const id = uid();
+        const album: ServerAlbum = {
+          id,
+          familyId: state.family?.id ?? '',
+          name,
+          createdBy: userId,
+          ts: new Date().toISOString(),
+          photoCount: 0,
+          coverPath: null,
+        };
+        dispatch({ type: 'ALBUM_UPSERT', album });
+        if (token) createAlbumItem(token, { id, name }).catch((err) => console.warn('[store] createAlbum failed', err));
+        return id;
+      },
+
+      renameAlbum: (id: string, name: string) => {
+        const current = state.albums.find((a) => a.id === id);
+        if (current) dispatch({ type: 'ALBUM_UPSERT', album: { ...current, name } });
+        if (token) renameAlbumItem(token, id, name).catch((err) => console.warn('[store] renameAlbum failed', err));
+      },
+
+      removeAlbum: (id: string) => {
+        dispatch({ type: 'ALBUM_REMOVE', id });
+        if (token) removeAlbumItem(token, id).catch((err) => console.warn('[store] removeAlbum failed', err));
+      },
+
+      /** Fetch an album's photos (lazy — photos never ride along in bootstrap/sync). */
+      loadPhotos: async (albumId: string) => {
+        if (!token) return;
+        const { photos } = await getAlbumPhotos(token, albumId);
+        dispatch({ type: 'PHOTOS_SET', albumId, photos });
+      },
+
+      /**
+       * Open the system image picker and upload the chosen photo. NOT
+       * optimistic — the row is only added once the server responds, so
+       * callers should show a pending state while the promise is in flight.
+       * Resolves true if a photo was uploaded, false if the user cancelled.
+       */
+      addPhotoFromPicker: async (albumId: string): Promise<boolean> => {
+        if (!token) throw new Error('not signed in');
+        if (Platform.OS !== 'web') {
+          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!perm.granted) throw new Error('Photo library access was denied');
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          quality: 0.8,
+          allowsMultipleSelection: false,
+        });
+        if (result.canceled || !result.assets.length) return false;
+        const asset = result.assets[0];
+        const mimeType = asset.mimeType ?? 'image/jpeg';
+        const name = asset.fileName ?? `photo-${Date.now()}.${mimeType.split('/')[1] ?? 'jpg'}`;
+        const { photo } = await uploadPhoto(token, albumId, {
+          uri: asset.uri,
+          name,
+          mimeType,
+          w: asset.width,
+          h: asset.height,
+        });
+        dispatch({ type: 'PHOTO_UPSERT', photo });
+        return true;
+      },
+
+      removePhoto: (photoId: string, albumId: string) => {
+        dispatch({ type: 'PHOTO_REMOVE', id: photoId, albumId });
+        if (token) removePhotoItem(token, photoId).catch((err) => console.warn('[store] removePhoto failed', err));
+      },
+
       /** Log in an existing user, persist the token, and hydrate family state. */
       login: async (username: string, password: string) => {
         const { token: newToken, user } = await authLogin({ username, password });
@@ -745,7 +921,7 @@ export function useActions() {
         dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
       },
     }),
-    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events],
+    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events, state.albums],
   );
 }
 
@@ -895,4 +1071,15 @@ export function useTasks(): ServerTask[] {
 export function useEvents(): ServerEvent[] {
   const { state } = useCtx();
   return useMemo(() => [...state.events].sort((a, b) => Date.parse(a.startTs) - Date.parse(b.startTs)), [state.events]);
+}
+
+/** The family's photo albums (with photoCount/coverPath), sorted by creation time ascending. */
+export function useAlbums(): ServerAlbum[] {
+  const { state } = useCtx();
+  return useMemo(() => [...state.albums].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts)), [state.albums]);
+}
+
+/** An album's photos, ascending by ts — or undefined until loadPhotos(albumId) has run. */
+export function useAlbumPhotos(albumId: string): ServerPhoto[] | undefined {
+  return useCtx().state.photosByAlbum[albumId];
 }

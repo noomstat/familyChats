@@ -2,6 +2,7 @@
 // (moved here from notifications/registerPushToken.ts, which now imports it
 // back) and Bearer-token injection. All request/response typing for the
 // auth + Family Space endpoints added in Phase A lives here too.
+import { Platform } from 'react-native';
 
 // Base URL of the FamilyChats API. Override per-environment with an
 // EXPO_PUBLIC_API_BASE_URL env var (Expo exposes EXPO_PUBLIC_* to the client).
@@ -149,6 +150,8 @@ export interface BootstrapResponse {
   grocery: ServerGroceryItem[];
   tasks: ServerTask[];
   events: ServerEvent[];
+  /** Album metadata only — photos are fetched lazily per album (getAlbumPhotos). */
+  albums: ServerAlbum[];
   serverTime: string;
 }
 
@@ -158,6 +161,8 @@ export interface SyncResponse {
   grocery: ServerGroceryItem[];
   tasks: ServerTask[];
   events: ServerEvent[];
+  /** Full current list, like grocery/tasks/events (photos are NOT synced — refetch per album). */
+  albums: ServerAlbum[];
   serverTime: string;
 }
 
@@ -333,6 +338,132 @@ export function updateEventItem(token: string, id: string, patch: EventPatch) {
 
 export function removeEventItem(token: string, id: string) {
   return api<{ id: string }>(`/events/${id}`, { method: 'DELETE', token });
+}
+
+// ── Shared Photo Albums + file uploads ───────────────────────
+
+export interface ServerAlbum {
+  id: string;
+  familyId: string;
+  name: string;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+  photoCount: number;
+  /** file_path of the album's latest photo ('/uploads/…'), or null while empty. */
+  coverPath: string | null;
+}
+
+export interface ServerPhoto {
+  id: string;
+  albumId: string;
+  familyId: string;
+  uploaderId: string | null;
+  /** Public URL path ('/uploads/<uuid>.<ext>') — absolute URL via fileUrl(). */
+  filePath: string;
+  caption: string | null;
+  w: number | null;
+  h: number | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+/** Absolute URL for a server file path like '/uploads/<name>'. */
+export function fileUrl(path: string): string {
+  return `${API_BASE_URL}${path}`;
+}
+
+/** A local file to upload, as handed back by a picker (photos) or recorder (voice). */
+export interface UploadFile {
+  /** file:// on native; blob:/data: on web. */
+  uri: string;
+  name: string;
+  mimeType: string;
+}
+
+/**
+ * POST a file (+ optional extra text fields) as multipart/form-data under the
+ * field name `file`. Generic across media kinds — Phase E photos and Phase F
+ * voice messages both go through here.
+ *
+ * The fiddly part is the file value: React Native's FormData accepts a
+ * `{ uri, name, type }` descriptor, but on web the picker hands back a
+ * blob:/data: URI that must be fetched into a real Blob first.
+ */
+export async function uploadFile<T>(
+  token: string,
+  path: string,
+  file: UploadFile,
+  fields: Record<string, string | undefined> = {},
+): Promise<T> {
+  const form = new FormData();
+  if (Platform.OS === 'web') {
+    const raw = await (await fetch(file.uri)).blob();
+    // Some blob:/data: fetches come back untyped — retag so the server's mime allowlist sees the real type.
+    const blob = raw.type ? raw : new Blob([raw], { type: file.mimeType });
+    form.append('file', blob, file.name);
+  } else {
+    form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as unknown as Blob);
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) form.append(key, value);
+  }
+
+  // No explicit Content-Type — fetch must set the multipart boundary itself.
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : undefined;
+  if (!res.ok) {
+    const message = (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string')
+      ? data.error
+      : res.statusText || `upload failed (${res.status})`;
+    throw new Error(message);
+  }
+  return data as T;
+}
+
+export function getAlbums(token: string) {
+  return api<{ albums: ServerAlbum[] }>('/albums', { token });
+}
+
+export function createAlbumItem(token: string, input: { id: string; name: string }) {
+  return api<{ album: ServerAlbum }>('/albums', { method: 'POST', body: input, token });
+}
+
+export function renameAlbumItem(token: string, id: string, name: string) {
+  return api<{ album: ServerAlbum }>(`/albums/${id}`, { method: 'PATCH', body: { name }, token });
+}
+
+export function removeAlbumItem(token: string, id: string) {
+  return api<{ id: string }>(`/albums/${id}`, { method: 'DELETE', token });
+}
+
+export function getAlbumPhotos(token: string, albumId: string) {
+  return api<{ photos: ServerPhoto[] }>(`/albums/${albumId}/photos`, { token });
+}
+
+/** Multipart upload of one photo into an album. Caption/dimensions ride along as text fields. */
+export function uploadPhoto(
+  token: string,
+  albumId: string,
+  input: UploadFile & { id?: string; caption?: string; w?: number; h?: number },
+) {
+  const { uri, name, mimeType, id, caption, w, h } = input;
+  return uploadFile<{ photo: ServerPhoto }>(token, `/albums/${albumId}/photos`, { uri, name, mimeType }, {
+    id,
+    caption,
+    w: w != null ? String(w) : undefined,
+    h: h != null ? String(h) : undefined,
+  });
+}
+
+export function removePhotoItem(token: string, id: string) {
+  return api<{ id: string; albumId: string }>(`/photos/${id}`, { method: 'DELETE', token });
 }
 
 // ── Realtime ─────────────────────────────────────────────────

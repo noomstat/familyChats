@@ -7,6 +7,7 @@ import { broadcastToUsers, broadcastToFamily } from './ws.js';
 import { notifyUsers } from './notifications.js';
 import { listGrocery, listTasks } from './lists.js';
 import { listEvents } from './events.js';
+import { listAlbums } from './albums.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -79,7 +80,7 @@ function groupShape(group, members) {
  */
 export async function getBootstrap(userId) {
   const familyId = await userFamilyId(userId);
-  if (!familyId) return { groups: [], grocery: [], tasks: [], events: [], serverTime: new Date().toISOString() };
+  if (!familyId) return { groups: [], grocery: [], tasks: [], events: [], albums: [], serverTime: new Date().toISOString() };
 
   const { rows: groupRows } = await query(
     `SELECT g.id, g.family_id, g.name
@@ -126,17 +127,24 @@ export async function getBootstrap(userId) {
   const grocery = await listGrocery(userId);
   const tasks = await listTasks(userId);
   const events = await listEvents(userId);
+  // Albums ship with their photoCount/coverPath aggregates, but deliberately
+  // WITHOUT their photos: a family's photo collection grows unboundedly, so
+  // photos are fetched lazily per album via GET /albums/:id/photos instead of
+  // riding along in bootstrap like the other (family-scale) lists.
+  const albums = await listAlbums(userId);
 
-  return { groups, grocery, tasks, events, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, serverTime: new Date().toISOString() };
 }
 
 /**
  * WS-reconnect catch-up: everything new across all my groups since `afterIso`,
- * plus grocery/tasks/events. Unlike messages/reads (which are filtered by
- * `after`), grocery items, tasks, and events are family-scale (a handful to a
- * few dozen rows) so the simplest-correct choice is to just resend the full
- * current list on every sync rather than track per-row change
- * timestamps/tombstones for deletes.
+ * plus grocery/tasks/events/albums. Unlike messages/reads (which are filtered
+ * by `after`), grocery items, tasks, events, and albums are family-scale (a
+ * handful to a few dozen rows) so the simplest-correct choice is to just
+ * resend the full current list on every sync rather than track per-row change
+ * timestamps/tombstones for deletes. Photos deliberately diverge from that
+ * full-resend pattern: they grow unboundedly, so they're never in sync —
+ * clients refetch GET /albums/:id/photos for whichever album they're viewing.
  */
 export async function getSyncSince(userId, afterIso) {
   const serverTime = new Date().toISOString();
@@ -146,13 +154,14 @@ export async function getSyncSince(userId, afterIso) {
   const grocery = await listGrocery(userId);
   const tasks = await listTasks(userId);
   const events = await listEvents(userId);
+  const albums = await listAlbums(userId);
 
   const { rows: groupRows } = await query(
     'SELECT group_id FROM group_members WHERE user_id = $1',
     [userId],
   );
   const groupIds = groupRows.map((r) => r.group_id);
-  if (!groupIds.length) return { messages: [], reads: [], grocery, tasks, events, serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], grocery, tasks, events, albums, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -169,6 +178,7 @@ export async function getSyncSince(userId, afterIso) {
     grocery,
     tasks,
     events,
+    albums,
     serverTime,
   };
 }

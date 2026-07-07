@@ -10,6 +10,9 @@ out/
 .expo-webcheck/
 web-build/
 
+# User-uploaded files (photos/voice) — server disk storage, never committed
+server/uploads/
+
 # Env
 .env
 .env.local

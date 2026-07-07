@@ -1,5 +1,7 @@
 // API process (`npm start`). Auth, Family Space, device tokens, and the WS hub.
 // Does NOT send pushes itself — notifyUsers() only enqueues; the worker sends.
+import crypto from 'node:crypto';
+import { unlink } from 'node:fs/promises';
 import express from 'express';
 import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
@@ -31,11 +33,27 @@ import {
   removeTask,
 } from './src/lists.js';
 import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js';
+import { upload, UPLOADS_DIR } from './src/uploads.js';
+import {
+  listAlbums,
+  createAlbum,
+  renameAlbum,
+  removeAlbum,
+  listPhotos,
+  addPhoto,
+  removePhoto,
+} from './src/albums.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
 const app = express();
 app.use(express.json());
+
+// Uploaded files (photos now, voice messages in Phase F). Public read is
+// acceptable for v1: filenames are crypto.randomUUID()-based and therefore
+// unguessable, and the directory is never listed. Revisit (signed URLs /
+// auth middleware) if that ever changes.
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ── Auth ─────────────────────────────────────────────────────
 
@@ -364,6 +382,87 @@ app.delete('/events/:id', requireAuth, async (req, res, next) => {
   }
 });
 
+// ── Shared Photo Albums ──────────────────────────────────────
+
+app.get('/albums', requireAuth, async (req, res, next) => {
+  try {
+    const albums = await listAlbums(req.user.id);
+    res.json({ albums });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/albums', requireAuth, async (req, res, next) => {
+  try {
+    const { id, name } = req.body ?? {};
+    const album = await createAlbum({ id, name, userId: req.user.id });
+    res.status(201).json({ album });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/albums/:id', requireAuth, async (req, res, next) => {
+  try {
+    const album = await renameAlbum({ id: req.params.id, name: req.body?.name, userId: req.user.id });
+    res.json({ album });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/albums/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeAlbum({ id: req.params.id, userId: req.user.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/albums/:id/photos', requireAuth, async (req, res, next) => {
+  try {
+    const photos = await listPhotos(req.params.id, req.user.id);
+    res.json({ photos });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Multipart: field `file` (the image) + optional `id`/`caption`/`w`/`h` text
+// fields. The file is already on disk when the handler runs — if the row
+// insert is rejected (bad album, not a member, …), unlink it so failed
+// uploads don't leak orphan files.
+app.post('/albums/:id/photos', requireAuth, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file is required' });
+    const { id, caption, w, h } = req.body ?? {};
+    const photo = await addPhoto({
+      id: id || crypto.randomUUID(),
+      albumId: req.params.id,
+      userId: req.user.id,
+      filePath: `/uploads/${req.file.filename}`,
+      caption,
+      w,
+      h,
+    });
+    res.status(201).json({ photo });
+  } catch (err) {
+    if (req.file) await unlink(req.file.path).catch(() => {});
+    next(err);
+  }
+});
+
+app.delete('/photos/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removePhoto({ id: req.params.id, userId: req.user.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Example trigger. In practice you'd call notifyUsers() from inside your domain
 // logic (on new message, live-share start, expense added, settle, …).
 app.post('/notify', async (req, res, next) => {
@@ -380,7 +479,10 @@ app.post('/notify', async (req, res, next) => {
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
   console.error('[api]', err);
-  res.status(err.status || 500).json({ error: err.message || 'Internal error' });
+  // Multer errors (e.g. LIMIT_FILE_SIZE) carry no .status of their own but
+  // are always the client's fault — surface them as 400s, not 500s.
+  const status = err.status || (err.name === 'MulterError' ? 400 : 500);
+  res.status(status).json({ error: err.message || 'Internal error' });
 });
 
 const port = Number(process.env.PORT) || 3002;

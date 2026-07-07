@@ -36,11 +36,13 @@ export function useRealtime(): void {
           for (const r of data.reads) {
             dispatch({ type: 'MERGE_READ', groupId: r.groupId, userId: r.userId, ts: Date.parse(r.lastReadTs) });
           }
-          // Grocery/tasks/events are resent in full on every sync (see server's
-          // getSyncSince comment) — a plain replace is simplest and correct.
+          // Grocery/tasks/events/albums are resent in full on every sync (see
+          // server's getSyncSince comment) — a plain replace is simplest and
+          // correct. Photos are never synced; screens refetch per album.
           dispatch({ type: 'GROCERY_SET', grocery: data.grocery });
           dispatch({ type: 'TASK_SET', tasks: data.tasks });
           dispatch({ type: 'EVENT_SET', events: data.events });
+          dispatch({ type: 'ALBUM_SET', albums: data.albums });
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
         } else {
           const data = await getBootstrap(session.token);
@@ -90,6 +92,14 @@ export function useRealtime(): void {
           case 'event':
             if (data.action === 'upsert') dispatch({ type: 'EVENT_UPSERT', event: data.event });
             else if (data.action === 'remove') dispatch({ type: 'EVENT_REMOVE', id: data.id });
+            break;
+          case 'album':
+            if (data.action === 'upsert') dispatch({ type: 'ALBUM_UPSERT', album: data.album });
+            else if (data.action === 'remove') dispatch({ type: 'ALBUM_REMOVE', id: data.id });
+            break;
+          case 'photo':
+            if (data.action === 'upsert') dispatch({ type: 'PHOTO_UPSERT', photo: data.photo });
+            else if (data.action === 'remove') dispatch({ type: 'PHOTO_REMOVE', id: data.id, albumId: data.albumId });
             break;
           default:
             break; // 'hello' and any future event types we don't handle yet

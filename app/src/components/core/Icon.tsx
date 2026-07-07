@@ -43,6 +43,8 @@ import {
   Circle,
   Trash2,
   Check,
+  Camera,
+  Pencil,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -94,6 +96,8 @@ const REGISTRY: Record<string, LucideIcon> = {
   circle: Circle,
   trash: Trash2,
   check: Check,
+  camera: Camera,
+  pencil: Pencil,
 };
 
 export type IconName = keyof typeof REGISTRY;
