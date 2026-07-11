@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, radius } from '../theme';
 import { Icon, Badge, Card } from '../components/core';
 import { PinMark } from '../components/brand/PinMark';
-import { useAlbums, useEvents, useFamily, useGrocery, useTasks } from '../store';
+import { thb, useAlbums, useEvents, useFamily, useFinance, useGrocery, useTasks } from '../store';
 import type { FamilyStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'FamilyHub'>;
@@ -28,6 +28,7 @@ export function FamilyHubScreen({ navigation }: Props) {
   const tasks = useTasks();
   const events = useEvents();
   const albums = useAlbums();
+  const finance = useFinance();
   const unchecked = grocery.filter((g) => !g.checkedBy).length;
   const open = tasks.filter((t) => !t.done).length;
   const now = new Date();
@@ -90,6 +91,15 @@ export function FamilyHubScreen({ navigation }: Props) {
       tint: colors.coral50,
       tintFg: colors.coral500,
       onPress: () => navigation.navigate('AISearch'),
+    },
+    {
+      key: 'finance',
+      icon: 'wallet',
+      label: 'Finance',
+      subtitle: finance.budget ? `${thb(finance.remaining)} remaining` : 'Set up a budget',
+      tint: colors.ping100,
+      tintFg: colors.ping700,
+      onPress: () => navigation.navigate('Finance'),
     },
   ];
 

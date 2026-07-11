@@ -8,6 +8,7 @@ import { notifyUsers } from './notifications.js';
 import { listGrocery, listTasks } from './lists.js';
 import { listEvents } from './events.js';
 import { listAlbums } from './albums.js';
+import { getFinance } from './finance.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -80,7 +81,19 @@ function groupShape(group, members) {
  */
 export async function getBootstrap(userId) {
   const familyId = await userFamilyId(userId);
-  if (!familyId) return { groups: [], grocery: [], tasks: [], events: [], albums: [], serverTime: new Date().toISOString() };
+  if (!familyId) {
+    return {
+      groups: [],
+      grocery: [],
+      tasks: [],
+      events: [],
+      albums: [],
+      expenses: [],
+      transfers: [],
+      budget: null,
+      serverTime: new Date().toISOString(),
+    };
+  }
 
   const { rows: groupRows } = await query(
     `SELECT g.id, g.family_id, g.name
@@ -132,8 +145,9 @@ export async function getBootstrap(userId) {
   // photos are fetched lazily per album via GET /albums/:id/photos instead of
   // riding along in bootstrap like the other (family-scale) lists.
   const albums = await listAlbums(userId);
+  const { expenses, transfers, budget } = await getFinance(userId);
 
-  return { groups, grocery, tasks, events, albums, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, serverTime: new Date().toISOString() };
 }
 
 /**
@@ -155,13 +169,14 @@ export async function getSyncSince(userId, afterIso) {
   const tasks = await listTasks(userId);
   const events = await listEvents(userId);
   const albums = await listAlbums(userId);
+  const { expenses, transfers, budget } = await getFinance(userId);
 
   const { rows: groupRows } = await query(
     'SELECT group_id FROM group_members WHERE user_id = $1',
     [userId],
   );
   const groupIds = groupRows.map((r) => r.group_id);
-  if (!groupIds.length) return { messages: [], reads: [], grocery, tasks, events, albums, serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], grocery, tasks, events, albums, expenses, transfers, budget, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -179,6 +194,9 @@ export async function getSyncSince(userId, afterIso) {
     tasks,
     events,
     albums,
+    expenses,
+    transfers,
+    budget,
     serverTime,
   };
 }

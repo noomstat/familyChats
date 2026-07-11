@@ -3,6 +3,7 @@ import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { colors, semantic, fontFamily, radius, shadow } from '../theme';
 import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
@@ -11,7 +12,6 @@ import { LocationTile, LivePill } from '../components/location';
 import { cancelRecording, fileInfoFromUri, requestPermissions, startRecording, stopRecording } from '../audio/voiceRecorder';
 import {
   ChatGroup,
-  Group,
   Message,
   useActions,
   useFamily,
@@ -23,7 +23,7 @@ import {
 } from '../store';
 import { getGroupSummary } from '../api/client';
 import type { FamilyMember } from '../api/client';
-import type { ChatsStackParamList } from '../navigation/types';
+import type { ChatsStackParamList, RootTabParamList } from '../navigation/types';
 
 /** mm:ss for the in-progress recording bar's elapsed timer. */
 function fmtElapsed(ms: number): string {
@@ -74,18 +74,12 @@ export function ThreadScreen({ route, navigation }: Props) {
   // can change live (rename, add/remove member) — but a fixed id is stable.
   const group: ChatGroup = routeGroup;
 
-  // Expenses is the local-only, pre-existing ledger feature — it's keyed by
-  // a display-name roster (see model.ts's `Group`), not user ids. Adapt the
-  // real chat group's shape minimally so that screen keeps compiling/working.
-  const expensesGroup: Group = useMemo(
-    () => ({
-      id: group.id,
-      name: group.name,
-      members: group.members.length,
-      roster: group.members.map(nameOf),
-    }),
-    [group.id, group.name, group.members, nameOf],
-  );
+  // Family Finance is family-wide (not per-group, see Phase I) — the receipt
+  // button deep-links to the Finance tab instead of opening an in-stack screen.
+  const openFinance = () => {
+    const rootNav = navigation.getParent<BottomTabNavigationProp<RootTabParamList>>();
+    rootNav?.navigate('Family', { screen: 'Finance' });
+  };
 
   // Opening/refocusing a thread — or new messages arriving while it's
   // focused — marks it read.
@@ -198,7 +192,7 @@ export function ThreadScreen({ route, navigation }: Props) {
           </View>
         </View>
         <IconButton name="sparkles" variant="soft" accessibilityLabel="Catch me up" onPress={() => setSummaryOpen(true)} />
-        <IconButton name="receipt" variant="soft" accessibilityLabel="Expenses" onPress={() => navigation.navigate('Expenses', { group: expensesGroup })} />
+        <IconButton name="receipt" variant="soft" accessibilityLabel="Family Finance" onPress={openFinance} />
         <IconButton name="settings" variant="soft" accessibilityLabel="Group settings" onPress={() => setSettingsOpen(true)} />
         <IconButton name="map" variant="soft" accessibilityLabel="View map" />
       </View>

@@ -25,7 +25,7 @@ A native app (iOS / Android / web via Expo), backed by a real Postgres server, b
 - **AI summary & search** — a "Catch me up" thread summary and natural-language family search over messages/tasks/events/grocery/photos (needs an `ANTHROPIC_API_KEY` on the server; degrades to a friendly message without one).
 - **Memories** — a family memory timeline merging photos, past events, and milestones (family founded, members joined, chats created), grouped by month.
 - **Push notifications** — new messages and task assignments push to devices (Expo push, via a Postgres-backed job queue).
-- **Expenses** — income/expense summary grouped **by category** and **by person**, with a shareable receipt (amounts in **THB**). Local-only for now, not yet synced through the family server.
+- **Family Finance** — a family-wide shared ledger: monthly budget hero, expenses grouped **by category** and **by person** (amounts in **THB**), split bills, settle-up, payment reminders, and AI receipt scan (needs an `ANTHROPIC_API_KEY` on the server; degrades to manual entry with the photo attached without one). Fully synced through the family server.
 - **Map** & **You** — live map view and profile/settings (family name, invite code, logout).
 
 Design language: *warm cartography meets messaging* — coral (`#FF5A3C`) for actions, ping-green for live presence, warm paper neutrals, rounded chat-bubble geometry, and a mono face for coordinates/timestamps.
@@ -57,4 +57,4 @@ Demo login: username `you`, password `family123` (also seeded: `mara`, `dev`, `s
 
 ## Status
 
-Auth, the Family Space, and all ten features above are implemented end-to-end against a real Postgres + WebSocket backend (`server/`). The app's local Context+reducer store (`app/src/store`) is hydrated from the server (`/bootstrap` + `/sync` + realtime WS events) and persists to `AsyncStorage` for offline reads. Expenses remains local-only/sample data (`app/src/data/familyChats.ts`) — the one surface not yet wired to the family server.
+Auth, the Family Space, and all ten features above are implemented end-to-end against a real Postgres + WebSocket backend (`server/`). The app's local Context+reducer store (`app/src/store`) is hydrated from the server (`/bootstrap` + `/sync` + realtime WS events) and persists to `AsyncStorage` for offline reads.

@@ -43,8 +43,9 @@ import {
   addPhoto,
   removePhoto,
 } from './src/albums.js';
-import { summarizeGroup, searchFamily } from './src/ai.js';
+import { summarizeGroup, searchFamily, scanReceipt } from './src/ai.js';
 import { getTimeline } from './src/timeline.js';
+import { addExpense, removeExpense, addTransfer, setBudget, remind } from './src/finance.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -513,6 +514,83 @@ app.delete('/photos/:id', requireAuth, async (req, res, next) => {
     const result = await removePhoto({ id: req.params.id, userId: req.user.id });
     res.json(result);
   } catch (err) {
+    next(err);
+  }
+});
+
+// ── Family Finance ───────────────────────────────────────────
+
+app.post('/expenses', requireAuth, async (req, res, next) => {
+  try {
+    const { id, label, categoryId, amount, paidBy, splitAmong, receiptPath } = req.body ?? {};
+    const expense = await addExpense({ id, label, categoryId, amount, paidBy, splitAmong, receiptPath, userId: req.user.id });
+    res.status(201).json({ expense });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/expenses/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeExpense({ id: req.params.id, userId: req.user.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/transfers', requireAuth, async (req, res, next) => {
+  try {
+    const { id, toId, amount } = req.body ?? {};
+    const transfer = await addTransfer({ id, toId, amount, userId: req.user.id });
+    res.status(201).json({ transfer });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put('/budget', requireAuth, async (req, res, next) => {
+  try {
+    const { month, amount } = req.body ?? {};
+    const budget = await setBudget({ month, amount, userId: req.user.id });
+    res.json({ budget });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/finance/remind', requireAuth, async (req, res, next) => {
+  try {
+    const { toUserId, amount } = req.body ?? {};
+    const result = await remind({ toUserId, amount, userId: req.user.id });
+    res.status(202).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Multipart: field `file` (the receipt photo). The photo is kept — and
+// receiptPath returned — even when the AI scan itself fails/503s (no
+// ANTHROPIC_API_KEY): manual entry with the photo attached is the fallback,
+// same graceful-degrade UX as Phase G's chat summary/search.
+app.post('/finance/scan-receipt', requireAuth, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file is required' });
+    if (!req.file.mimetype.startsWith('image/')) {
+      await unlink(req.file.path).catch(() => {});
+      return res.status(400).json({ error: `expected an image file, got ${req.file.mimetype}` });
+    }
+    const receiptPath = `/uploads/${req.file.filename}`;
+    let scan = null;
+    let scanError;
+    try {
+      scan = await scanReceipt(receiptPath);
+    } catch (err) {
+      scanError = err.message || 'AI scan failed';
+    }
+    res.json(scanError ? { receiptPath, scan, scanError } : { receiptPath, scan });
+  } catch (err) {
+    if (req.file) await unlink(req.file.path).catch(() => {});
     next(err);
   }
 });

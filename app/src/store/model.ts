@@ -1,33 +1,7 @@
 // FamilyChats domain model — types, seed data, and pure derivations.
 // The store (AppStore.tsx) holds the mutable slices; everything here is either
 // a static definition, seed data, or a pure function over store state.
-
-export const CURRENT_USER = 'You Now';
-
-// ─────────────────────────────────────────────────────────── Groups
-//
-// NOTE: as of Phase B, real chat groups are server-backed and dynamic (see
-// `ChatGroup` in AppStore.tsx, fed by GET /bootstrap). This static roster is
-// now used ONLY by the local-only Expenses feature (ledger math keyed by
-// display name) — do not wire it back into chat state.
-
-export interface Group {
-  id: string;
-  name: string;
-  /** Group size; null for a 1:1 DM. */
-  members: number | null;
-  roster: string[];
-}
-
-export const GROUPS: Group[] = [
-  { id: 'trail', name: 'Trail Crew', members: 6, roster: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'] },
-  { id: 'climb', name: 'Weekend Climb', members: 4, roster: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'] },
-  { id: 'dev', name: 'Dev Kaur', members: null, roster: ['You Now', 'Dev Kaur'] },
-  { id: 'food', name: 'Taco Tuesday', members: 5, roster: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'] },
-  { id: 'fam', name: 'Family', members: 4, roster: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'] },
-];
-
-export const groupById = (id: string) => GROUPS.find((g) => g.id === id);
+import type { ServerExpense, ServerTransfer } from '../api/client';
 
 // ─────────────────────────────────────────────────────────── Messages
 //
@@ -53,11 +27,6 @@ export interface Message {
   ts: number;
 }
 
-// A fixed reference point so seeded expense timestamps are deterministic
-// (2026-07-05). Chat no longer uses this — messages carry real server ts.
-const SEED_DAY = Date.UTC(2026, 6, 5, 6, 0, 0);
-const at = (h: number, m: number) => SEED_DAY + (h * 60 + m) * 60_000;
-
 export interface LiveShare {
   since: number;
   expiresLabel: string;
@@ -72,7 +41,12 @@ export function timeLabel(ts: number): string {
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
 }
 
-// ─────────────────────────────────────────────────────────── Expenses ledger
+// ─────────────────────────────────────────────────────────── Family Finance
+//
+// Server-backed, family-wide shared ledger (see ServerExpense/ServerTransfer/
+// ServerBudget in api/client.ts) — `paidBy`/`splitAmong`/transfer parties are
+// user ids, resolved to display names at render time via family members
+// (same pattern as ThreadScreen's `nameOf`).
 
 export type CategoryId = 'food' | 'stay' | 'trans' | 'gear' | 'refund';
 
@@ -96,44 +70,23 @@ export const CATEGORIES: CategoryMeta[] = [
 export const categoryMeta = (id: CategoryId) => CATEGORIES.find((c) => c.id === id)!;
 export const SPEND_CATEGORIES = CATEGORIES.filter((c) => !c.income);
 
-export interface Expense {
-  id: string;
-  groupId: string;
-  label: string;
-  categoryId: CategoryId;
-  amount: number;
-  paidBy: string;
-  splitAmong: string[];
-  ts: number;
+/** Thai Baht formatter — `฿35,000` (thousands-separated, no decimals when whole, else 2dp). */
+export function thb(n: number): string {
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  const isWhole = Math.abs(abs - Math.round(abs)) < 0.005;
+  const formatted = isWhole
+    ? Math.round(abs).toLocaleString('en-US')
+    : abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${sign}฿${formatted}`;
 }
 
-/** A settlement payment from one member to another (used by "Settle up"). */
-export interface Transfer {
-  id: string;
-  groupId: string;
-  from: string;
-  to: string;
-  amount: number;
-  ts: number;
+/** 'YYYY-MM' for a given date (local time), defaulting to now — matches the server's budget `month` key. */
+export function monthKey(date: Date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export const SEED_EXPENSES: Expense[] = [
-  { id: 'e1', groupId: 'trail', label: 'Trailhead Diner', categoryId: 'food', amount: 128.4, paidBy: 'You Now', splitAmong: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'], ts: at(14, 52) },
-  { id: 'e2', groupId: 'trail', label: 'Cabin night', categoryId: 'stay', amount: 220.0, paidBy: 'Mara Ito', splitAmong: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'], ts: at(12, 5) },
-  { id: 'e3', groupId: 'trail', label: 'Petrol', categoryId: 'trans', amount: 84.0, paidBy: 'Dev Kaur', splitAmong: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'], ts: at(9, 30) },
-  { id: 'e4', groupId: 'trail', label: 'Climbing gear', categoryId: 'gear', amount: 40.0, paidBy: 'You Now', splitAmong: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'], ts: at(8, 10) },
-  { id: 'e5', groupId: 'trail', label: 'Coffee run', categoryId: 'food', amount: 36.0, paidBy: 'You Now', splitAmong: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'], ts: at(13, 15) },
-  { id: 'e6', groupId: 'trail', label: 'Deposit returned', categoryId: 'refund', amount: 80.0, paidBy: 'Mara Ito', splitAmong: ['You Now', 'Mara Ito', 'Dev Kaur', 'Sam Ng'], ts: at(15, 0) },
-];
-
-export const SEED_TRANSFERS: Transfer[] = [];
-
-/** FamilyChats settled on Thai Baht mid-design (see chats/chat1.md). */
-export const money = (n: number) => (n < 0 ? '-' : '') + 'THB ' + Math.abs(n).toFixed(2);
-
-// ── Derivations (pure) ──────────────────────────────────────
-
-export interface CategoryTotal {
+export interface FinCategoryTotal {
   id: CategoryId;
   label: string;
   icon: string;
@@ -141,30 +94,34 @@ export interface CategoryTotal {
   amount: number;
 }
 
-export interface PersonBalance {
-  name: string;
+export interface FinPersonBalance {
+  userId: string;
   paid: number;
   share: number;
-  net: number; // + owed to them, − they owe
+  /** + owed to them, − they owe. */
+  net: number;
 }
 
-export interface LedgerSummary {
-  spendByCategory: CategoryTotal[];
+export interface FinanceSummary {
+  spendByCategory: FinCategoryTotal[];
   income: { label: string; icon: string; amount: number };
   expenseTotal: number;
   incomeTotal: number;
-  people: PersonBalance[];
-  you: PersonBalance;
+  /** Sorted by net descending (biggest creditor first, biggest debtor last). */
+  people: FinPersonBalance[];
 }
 
-/** Roll a group's expenses + transfers into category totals and per-person balances. */
-export function summarize(groupId: string, expenses: Expense[], transfers: Transfer[]): LedgerSummary {
-  const rows = expenses.filter((e) => e.groupId === groupId);
-  const xfers = transfers.filter((t) => t.groupId === groupId);
-  const spend = rows.filter((e) => !categoryMeta(e.categoryId).income);
-  const refunds = rows.filter((e) => categoryMeta(e.categoryId).income);
+/**
+ * Roll a family's expenses + transfers into category totals and per-person
+ * balances. Id-keyed port of the old (pre-Phase-I) display-name-keyed
+ * `summarize()` — `memberIds` ensures every current family member gets a row
+ * even if they've never paid or split anything yet.
+ */
+export function summarizeFinance(expenses: ServerExpense[], transfers: ServerTransfer[], memberIds: string[]): FinanceSummary {
+  const spend = expenses.filter((e) => !categoryMeta(e.categoryId).income);
+  const refunds = expenses.filter((e) => categoryMeta(e.categoryId).income);
 
-  const spendByCategory: CategoryTotal[] = SPEND_CATEGORIES.map((c) => ({
+  const spendByCategory: FinCategoryTotal[] = SPEND_CATEGORIES.map((c) => ({
     id: c.id,
     label: c.label,
     icon: c.icon,
@@ -175,25 +132,25 @@ export function summarize(groupId: string, expenses: Expense[], transfers: Trans
   const expenseTotal = spend.reduce((s, e) => s + e.amount, 0);
   const incomeTotal = refunds.reduce((s, e) => s + e.amount, 0);
 
-  // Membership across all expenses in this group (union of splits + payers).
-  const names = new Set<string>();
-  rows.forEach((e) => { names.add(e.paidBy); e.splitAmong.forEach((n) => names.add(n)); });
-  const roster = groupById(groupId)?.roster ?? [];
-  roster.forEach((n) => names.add(n));
-
-  const people: PersonBalance[] = [...names].map((name) => {
-    const paid = spend.filter((e) => e.paidBy === name).reduce((s, e) => s + e.amount, 0);
-    const share = spend
-      .filter((e) => e.splitAmong.includes(name))
-      .reduce((s, e) => s + e.amount / e.splitAmong.length, 0);
-    const out = xfers.filter((t) => t.from === name).reduce((s, t) => s + t.amount, 0);
-    const inc = xfers.filter((t) => t.to === name).reduce((s, t) => s + t.amount, 0);
-    return { name, paid, share, net: paid - share + out - inc };
+  // Membership across all expenses (union of splits + payers) + every current member.
+  const ids = new Set<string>();
+  expenses.forEach((e) => {
+    ids.add(e.paidBy);
+    e.splitAmong.forEach((id) => ids.add(id));
   });
-  // Current user first, then largest creditor → debtor.
-  people.sort((a, b) => (a.name === CURRENT_USER ? -1 : b.name === CURRENT_USER ? 1 : b.net - a.net));
+  memberIds.forEach((id) => ids.add(id));
 
-  const you = people.find((p) => p.name === CURRENT_USER) ?? { name: CURRENT_USER, paid: 0, share: 0, net: 0 };
+  const people: FinPersonBalance[] = [...ids].map((userId) => {
+    const paid = spend.filter((e) => e.paidBy === userId).reduce((s, e) => s + e.amount, 0);
+    const share = spend
+      .filter((e) => e.splitAmong.includes(userId))
+      .reduce((s, e) => s + e.amount / e.splitAmong.length, 0);
+    const out = transfers.filter((t) => t.fromId === userId).reduce((s, t) => s + t.amount, 0);
+    const inc = transfers.filter((t) => t.toId === userId).reduce((s, t) => s + t.amount, 0);
+    return { userId, paid, share, net: paid - share + out - inc };
+  });
+  people.sort((a, b) => b.net - a.net);
+
   const refundMeta = categoryMeta('refund');
   return {
     spendByCategory,
@@ -201,21 +158,5 @@ export function summarize(groupId: string, expenses: Expense[], transfers: Trans
     expenseTotal,
     incomeTotal,
     people,
-    you,
   };
 }
-
-// Static receipt used by the shareable-receipt sheet (detail of expense e1).
-export const RECEIPT = {
-  merchant: 'Trailhead Diner',
-  date: 'SAT 14:52',
-  paidBy: 'You',
-  category: 'Food & drink',
-  items: [
-    ['Big breakfast x4', 52.0],
-    ['Cold brew x4', 18.0],
-    ['Trail sandwiches x6', 42.0],
-    ['Tax & tip', 16.4],
-  ] as [string, number][],
-  total: 128.4,
-};

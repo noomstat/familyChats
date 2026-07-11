@@ -4,15 +4,27 @@
 // once access is confirmed do we reach for the Anthropic client. That way a
 // non-member gets a normal 403 even when ANTHROPIC_API_KEY is unset, and a
 // member gets a clean 503 with a clear message instead of a stack trace.
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { query } from './db.js';
+import { UPLOADS_DIR } from './uploads.js';
 
-// Haiku-class model: cheap/fast, plenty for a catch-up summary or keyword
-// extraction + short synthesized answer. See the claude-api skill's model
-// table — this is the current Haiku alias, not guessed.
+// Haiku-class model: cheap/fast, plenty for a catch-up summary, keyword
+// extraction + short synthesized answer, or a receipt-scan vision call. See
+// the claude-api skill's model table — this is the current Haiku alias, not
+// guessed.
 const MODEL = 'claude-haiku-4-5';
 const SUMMARY_MESSAGE_LIMIT = 100;
 const HIT_LIMIT = 40;
+const RECEIPT_CATEGORY_IDS = new Set(['food', 'stay', 'trans', 'gear', 'refund']);
+const IMAGE_MEDIA_TYPE = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
 
 function notFound(message) {
   const err = new Error(message);
@@ -298,4 +310,80 @@ export async function searchFamily(queryText, userId) {
 
   const answer = firstText(response) || "I couldn't find anything about that.";
   return { answer, hits };
+}
+
+// ── Receipt Scan (#9, Family Finance) ─────────────────────────
+
+const RECEIPT_SYSTEM =
+  'You are a receipt-scanning assistant for a family finance app. Look at the receipt photo and extract its data. ' +
+  'Respond with ONLY a single JSON object, nothing else — no markdown fences, no commentary. Shape: ' +
+  '{"merchant": string|null, "total": number|null, "currency": string|null, "date": string|null, ' +
+  '"items": [{"label": string, "amount": number}], "suggestedCategory": one of "food","stay","trans","gear","refund"}. ' +
+  'Use null for any field you cannot read. "total" and item "amount"s are plain numbers (no currency symbols). ' +
+  '"date" is an ISO 8601 date (YYYY-MM-DD) if you can read one, else null. ' +
+  '"suggestedCategory" is your best guess at which of the five categories this receipt belongs to (food & drink, ' +
+  'lodging/stays, transport, gear/shopping, or refund) — default to "food" if genuinely unclear.';
+
+/** Best-effort parse of Claude's receipt JSON: strips markdown fences, defaults missing/invalid fields. */
+function parseReceiptScan(raw) {
+  const match = raw.match(/\{[\s\S]*\}/);
+  const parsed = JSON.parse(match ? match[0] : raw);
+  const items = Array.isArray(parsed.items)
+    ? parsed.items
+        .filter((it) => it && typeof it.label === 'string')
+        .map((it) => ({ label: it.label, amount: Number.isFinite(Number(it.amount)) ? Number(it.amount) : 0 }))
+    : [];
+  return {
+    merchant: typeof parsed.merchant === 'string' ? parsed.merchant : null,
+    total: Number.isFinite(Number(parsed.total)) ? Number(parsed.total) : null,
+    currency: typeof parsed.currency === 'string' ? parsed.currency : null,
+    date: typeof parsed.date === 'string' ? parsed.date : null,
+    items,
+    suggestedCategory: RECEIPT_CATEGORY_IDS.has(parsed.suggestedCategory) ? parsed.suggestedCategory : 'food',
+  };
+}
+
+/**
+ * Reads an already-uploaded receipt image from UPLOADS_DIR and asks Claude
+ * vision to extract merchant/total/date/items/category. Membership is NOT
+ * checked here (see server.js's /finance/scan-receipt route — the upload
+ * itself is family-scoped via addExpense's family membership, and the scan
+ * is best-effort on top of an already-stored file); a missing/misconfigured
+ * key surfaces as a clean 503 so the route can degrade to manual entry with
+ * the photo attached (same UX as Phase G's chat summary/search).
+ */
+export async function scanReceipt(filePath) {
+  const anthropic = getClient();
+
+  const name = path.basename(filePath ?? '');
+  const ext = path.extname(name).toLowerCase();
+  const mediaType = IMAGE_MEDIA_TYPE[ext];
+  if (!name || !mediaType) throw badRequest('receipt file must be an image (jpg/png/webp/gif)');
+
+  const bytes = await fs.readFile(path.join(UPLOADS_DIR, name));
+  const base64 = bytes.toString('base64');
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 800,
+    system: RECEIPT_SYSTEM,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: 'Extract this receipt as JSON.' },
+        ],
+      },
+    ],
+  });
+
+  const raw = firstText(response);
+  try {
+    return parseReceiptScan(raw);
+  } catch {
+    // Model didn't return parseable JSON — degrade to an empty-but-valid shape
+    // rather than failing the whole upload.
+    return { merchant: null, total: null, currency: null, date: null, items: [], suggestedCategory: 'food' };
+  }
 }

@@ -43,6 +43,7 @@ export function useRealtime(): void {
           dispatch({ type: 'TASK_SET', tasks: data.tasks });
           dispatch({ type: 'EVENT_SET', events: data.events });
           dispatch({ type: 'ALBUM_SET', albums: data.albums });
+          dispatch({ type: 'FIN_SET', expenses: data.expenses, transfers: data.transfers, budget: data.budget });
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
         } else {
           const data = await getBootstrap(session.token);
@@ -100,6 +101,16 @@ export function useRealtime(): void {
           case 'photo':
             if (data.action === 'upsert') dispatch({ type: 'PHOTO_UPSERT', photo: data.photo });
             else if (data.action === 'remove') dispatch({ type: 'PHOTO_REMOVE', id: data.id, albumId: data.albumId });
+            break;
+          case 'expense':
+            if (data.action === 'upsert') dispatch({ type: 'EXPENSE_UPSERT', expense: data.expense });
+            else if (data.action === 'remove') dispatch({ type: 'EXPENSE_REMOVE', id: data.id });
+            break;
+          case 'transfer':
+            if (data.action === 'upsert') dispatch({ type: 'TRANSFER_UPSERT', transfer: data.transfer });
+            break;
+          case 'budget':
+            if (data.action === 'upsert') dispatch({ type: 'BUDGET_UPSERT', budget: data.budget });
             break;
           default:
             break; // 'hello' and any future event types we don't handle yet

@@ -12,7 +12,7 @@ export {
   useReadCursors,
   useHasMore,
   useLastSync,
-  useLedger,
+  useFinance,
   useHydrated,
   useSession,
   useFamily,
@@ -23,5 +23,5 @@ export {
   useAlbums,
   useAlbumPhotos,
 } from './AppStore';
-export type { AppState, ChatRow, ChatGroup, Session, FamilyState } from './AppStore';
+export type { AppState, ChatRow, ChatGroup, Session, FamilyState, FinanceState } from './AppStore';
 export { useRealtime } from './useRealtime';

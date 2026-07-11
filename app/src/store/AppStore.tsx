@@ -3,38 +3,43 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import {
-  CURRENT_USER,
-  Expense,
-  LedgerSummary,
+  FinanceSummary,
   LiveShare,
   Message,
-  SEED_EXPENSES,
-  SEED_TRANSFERS,
+  categoryMeta,
+  monthKey,
+  summarizeFinance,
   timeLabel,
-  Transfer,
-  summarize,
 } from './model';
 import { tokenStorage } from './tokenStorage';
 import {
   BootstrapResponse,
+  CategoryId,
   EventPatch,
   FamilyInfo,
   FamilyMember,
+  ReceiptScan,
   ServerAlbum,
+  ServerBudget,
   ServerEvent,
+  ServerExpense,
   ServerGroup,
   ServerGroceryItem,
   ServerMessage,
   ServerPhoto,
   ServerTask,
+  ServerTransfer,
   TaskPatch,
+  UploadFile,
   authLogin,
   authLogout,
   authRegister,
   addEventItem,
+  addExpense as apiAddExpense,
   addGroupMember,
   addGroceryItem,
   addTaskItem,
+  addTransfer as apiAddTransfer,
   clearCheckedGrocery as apiClearCheckedGrocery,
   createAlbumItem,
   createFamily as apiCreateFamily,
@@ -46,14 +51,18 @@ import {
   joinFamily as apiJoinFamily,
   postMessage,
   postRead,
+  putBudget as apiPutBudget,
+  remindPayment as apiRemindPayment,
   removeAlbumItem,
   removeEventItem,
+  removeExpense as apiRemoveExpense,
   removeGroupMember,
   removeGroceryItem,
   removePhotoItem,
   removeTaskItem,
   renameAlbumItem,
   renameGroup as apiRenameGroup,
+  scanReceiptUpload,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
@@ -106,8 +115,10 @@ export interface AppState {
   /** ISO timestamp of the last successful bootstrap/sync — drives WS-reconnect catch-up. */
   lastSync: string | null;
   live: Record<string, LiveShare | undefined>;
-  expenses: Expense[];
-  transfers: Transfer[];
+  /** Family Finance: server-backed shared expenses/settlements/budget — see useFinance(). */
+  finExpenses: ServerExpense[];
+  finTransfers: ServerTransfer[];
+  budget: ServerBudget | null;
   /** Server-backed shared grocery list, unsorted — see useGrocery() for display order. */
   grocery: ServerGroceryItem[];
   /** Server-backed shared tasks, unsorted — see useTasks() for display order. */
@@ -142,8 +153,9 @@ const seedState: AppState = {
   hasMore: {},
   lastSync: null,
   live: {},
-  expenses: SEED_EXPENSES,
-  transfers: SEED_TRANSFERS,
+  finExpenses: [],
+  finTransfers: [],
+  budget: null,
   grocery: [],
   tasks: [],
   events: [],
@@ -190,8 +202,11 @@ type Action =
   | { type: 'MARK_READ'; groupId: string }
   | { type: 'START_LIVE'; groupId: string; expiresLabel: string }
   | { type: 'STOP_LIVE'; groupId: string }
-  | { type: 'ADD_EXPENSE'; expense: Omit<Expense, 'id' | 'ts'> }
-  | { type: 'SETTLE'; groupId: string; person: string }
+  | { type: 'FIN_SET'; expenses: ServerExpense[]; transfers: ServerTransfer[]; budget: ServerBudget | null }
+  | { type: 'EXPENSE_UPSERT'; expense: ServerExpense }
+  | { type: 'EXPENSE_REMOVE'; id: string }
+  | { type: 'TRANSFER_UPSERT'; transfer: ServerTransfer }
+  | { type: 'BUDGET_UPSERT'; budget: ServerBudget }
   | { type: 'GROCERY_SET'; grocery: ServerGroceryItem[] }
   | { type: 'GROCERY_UPSERT'; item: ServerGroceryItem }
   | { type: 'GROCERY_REMOVE'; id: string }
@@ -265,6 +280,9 @@ function reducer(state: AppState, action: Action): AppState {
         events: action.payload.events,
         albums: action.payload.albums,
         photosByAlbum,
+        finExpenses: action.payload.expenses,
+        finTransfers: action.payload.transfers,
+        budget: action.payload.budget,
         lastSync: action.payload.serverTime,
       };
     }
@@ -354,17 +372,30 @@ function reducer(state: AppState, action: Action): AppState {
     case 'STOP_LIVE':
       return { ...state, live: { ...state.live, [action.groupId]: undefined } };
 
-    case 'ADD_EXPENSE':
-      return { ...state, expenses: [...state.expenses, { ...action.expense, id: uid(), ts: Date.now() }] };
+    case 'FIN_SET':
+      return { ...state, finExpenses: action.expenses, finTransfers: action.transfers, budget: action.budget };
 
-    case 'SETTLE': {
-      const { people } = summarize(action.groupId, state.expenses, state.transfers);
-      const p = people.find((x) => x.name === action.person);
-      if (!p || p.net >= 0) return state; // only someone who owes can settle up
-      // They pay what they owe to the current user, zeroing their balance.
-      const transfer: Transfer = { id: uid(), groupId: action.groupId, from: action.person, to: CURRENT_USER, amount: -p.net, ts: Date.now() };
-      return { ...state, transfers: [...state.transfers, transfer] };
+    case 'EXPENSE_UPSERT': {
+      const idx = state.finExpenses.findIndex((e) => e.id === action.expense.id);
+      const finExpenses = idx >= 0
+        ? state.finExpenses.map((e, i) => (i === idx ? action.expense : e))
+        : [...state.finExpenses, action.expense];
+      return { ...state, finExpenses };
     }
+
+    case 'EXPENSE_REMOVE':
+      return { ...state, finExpenses: state.finExpenses.filter((e) => e.id !== action.id) };
+
+    case 'TRANSFER_UPSERT': {
+      const idx = state.finTransfers.findIndex((t) => t.id === action.transfer.id);
+      const finTransfers = idx >= 0
+        ? state.finTransfers.map((t, i) => (i === idx ? action.transfer : t))
+        : [...state.finTransfers, action.transfer];
+      return { ...state, finTransfers };
+    }
+
+    case 'BUDGET_UPSERT':
+      return { ...state, budget: action.budget };
 
     case 'GROCERY_SET':
       return { ...state, grocery: action.grocery };
@@ -688,8 +719,78 @@ export function useActions() {
         dispatch({ type: 'GROUP_REMOVE', groupId });
       },
 
-      addExpense: (expense: Omit<Expense, 'id' | 'ts'>) => dispatch({ type: 'ADD_EXPENSE', expense }),
-      settle: (groupId: string, person: string) => dispatch({ type: 'SETTLE', groupId, person }),
+      // ── Family Finance ────────────────────────────────────────
+
+      addExpense: (input: {
+        label: string;
+        categoryId: CategoryId;
+        amount: number;
+        paidBy: string;
+        splitAmong: string[];
+        receiptPath?: string;
+      }) => {
+        const userId = state.session?.userId;
+        if (!userId) return;
+        const id = uid();
+        const expense: ServerExpense = {
+          id,
+          familyId: state.family?.id ?? '',
+          label: input.label,
+          categoryId: input.categoryId,
+          amount: input.amount,
+          paidBy: input.paidBy,
+          splitAmong: input.splitAmong,
+          receiptPath: input.receiptPath ?? null,
+          createdBy: userId,
+          ts: new Date().toISOString(),
+        };
+        dispatch({ type: 'EXPENSE_UPSERT', expense });
+        if (token) {
+          apiAddExpense(token, {
+            id,
+            label: input.label,
+            categoryId: input.categoryId,
+            amount: input.amount,
+            paidBy: input.paidBy,
+            splitAmong: input.splitAmong,
+            receiptPath: input.receiptPath,
+          }).catch((err) => console.warn('[store] addExpense failed', err));
+        }
+      },
+
+      removeExpense: (id: string) => {
+        dispatch({ type: 'EXPENSE_REMOVE', id });
+        if (token) apiRemoveExpense(token, id).catch((err) => console.warn('[store] removeExpense failed', err));
+      },
+
+      /** I pay `amount` to `toId`, zeroing (part of) what I owe them. */
+      settleUp: (toId: string, amount: number) => {
+        const userId = state.session?.userId;
+        if (!userId) return;
+        const id = uid();
+        const transfer: ServerTransfer = { id, familyId: state.family?.id ?? '', fromId: userId, toId, amount, ts: new Date().toISOString() };
+        dispatch({ type: 'TRANSFER_UPSERT', transfer });
+        if (token) apiAddTransfer(token, { id, toId, amount }).catch((err) => console.warn('[store] settleUp failed', err));
+      },
+
+      /** Sets the current month's budget. */
+      setBudget: (amount: number) => {
+        const budget: ServerBudget = { month: monthKey(), amount };
+        dispatch({ type: 'BUDGET_UPSERT', budget });
+        if (token) apiPutBudget(token, { amount }).catch((err) => console.warn('[store] setBudget failed', err));
+      },
+
+      /** Pushes a "you owe" reminder to `toId`. Rejects on failure so the screen can show/clear a "Reminded ✓" state. */
+      remindPayment: async (toId: string, amount: number): Promise<void> => {
+        if (!token) throw new Error('not signed in');
+        await apiRemindPayment(token, { toUserId: toId, amount });
+      },
+
+      /** Upload a receipt photo + best-effort AI scan (graceful-degrade — see ScanReceiptResponse). */
+      scanReceipt: async (image: UploadFile): Promise<{ receiptPath: string; scan: ReceiptScan | null; scanError?: string }> => {
+        if (!token) throw new Error('not signed in');
+        return scanReceiptUpload(token, image);
+      },
 
       // ── Shared Grocery List ──────────────────────────────────
 
@@ -1051,9 +1152,33 @@ export function useLastSync(): string | null {
   return useCtx().state.lastSync;
 }
 
-export function useLedger(groupId: string): LedgerSummary {
+/** Family Finance: expenses/transfers/budget slices + a memoized ledger summary + monthly budget math. */
+export interface FinanceState {
+  expenses: ServerExpense[];
+  transfers: ServerTransfer[];
+  budget: ServerBudget | null;
+  summary: FinanceSummary;
+  /** Sum of this month's spend-category expenses (refunds excluded, not subtracted). */
+  spent: number;
+  /** budget.amount - spent (0 if no budget set yet); negative when over budget. */
+  remaining: number;
+}
+
+export function useFinance(): FinanceState {
   const { state } = useCtx();
-  return useMemo(() => summarize(groupId, state.expenses, state.transfers), [state.expenses, state.transfers, groupId]);
+  const memberIds = useMemo(() => state.family?.members.map((m) => m.id) ?? [], [state.family]);
+  const summary = useMemo(
+    () => summarizeFinance(state.finExpenses, state.finTransfers, memberIds),
+    [state.finExpenses, state.finTransfers, memberIds],
+  );
+  const spent = useMemo(() => {
+    const month = monthKey();
+    return state.finExpenses
+      .filter((e) => !categoryMeta(e.categoryId).income && monthKey(new Date(e.ts)) === month)
+      .reduce((s, e) => s + e.amount, 0);
+  }, [state.finExpenses]);
+  const remaining = (state.budget?.amount ?? 0) - spent;
+  return { expenses: state.finExpenses, transfers: state.finTransfers, budget: state.budget, summary, spent, remaining };
 }
 
 export function useHydrated(): boolean {

@@ -10,7 +10,6 @@ import {
   NewChatScreen,
   MapScreen,
   YouScreen,
-  ExpensesScreen,
   FamilyHubScreen,
   CalendarScreen,
   GroceryScreen,
@@ -19,6 +18,7 @@ import {
   AlbumScreen,
   AISearchScreen,
   MemoriesScreen,
+  FinanceScreen,
 } from '../screens';
 import type { ChatsStackParamList, FamilyStackParamList, RootTabParamList } from './types';
 
@@ -26,11 +26,11 @@ const ChatsStack = createNativeStackNavigator<ChatsStackParamList>();
 const FamilyStack = createNativeStackNavigator<FamilyStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
-// Thread, Expenses & NewChat have their own full-bleed headers/back buttons
-// and no bottom nav in the design — only the top-level list screen shows tab bar.
+// Thread & NewChat have their own full-bleed headers/back buttons and no
+// bottom nav in the design — only the top-level list screen shows tab bar.
 function chatsTabBarStyle(route: RouteProp<RootTabParamList, 'Chats'>) {
   const focusedRoute = getFocusedRouteNameFromRoute(route) ?? 'ChatList';
-  if (focusedRoute === 'Thread' || focusedRoute === 'Expenses' || focusedRoute === 'NewChat') {
+  if (focusedRoute === 'Thread' || focusedRoute === 'NewChat') {
     return { display: 'none' as const };
   }
   return { backgroundColor: semantic.surfaceCard, borderTopColor: semantic.borderSubtle };
@@ -42,14 +42,13 @@ function ChatsNavigator() {
       <ChatsStack.Screen name="ChatList" component={ChatListScreen} />
       <ChatsStack.Screen name="Thread" component={ThreadScreen} />
       <ChatsStack.Screen name="NewChat" component={NewChatScreen} />
-      <ChatsStack.Screen name="Expenses" component={ExpensesScreen} />
     </ChatsStack.Navigator>
   );
 }
 
-// FamilyHub, Calendar, Grocery, Tasks, and the Albums screens all keep the
-// tab bar visible (unlike Thread/Expenses/NewChat in the Chats stack) — no
-// per-route tabBarStyle override needed.
+// FamilyHub, Calendar, Grocery, Tasks, Albums, and Finance all keep the tab
+// bar visible (unlike Thread/NewChat in the Chats stack) — no per-route
+// tabBarStyle override needed.
 function FamilyNavigator() {
   return (
     <FamilyStack.Navigator screenOptions={{ headerShown: false }}>
@@ -61,6 +60,7 @@ function FamilyNavigator() {
       <FamilyStack.Screen name="Album" component={AlbumScreen} />
       <FamilyStack.Screen name="AISearch" component={AISearchScreen} />
       <FamilyStack.Screen name="Memories" component={MemoriesScreen} />
+      <FamilyStack.Screen name="Finance" component={FinanceScreen} />
     </FamilyStack.Navigator>
   );
 }

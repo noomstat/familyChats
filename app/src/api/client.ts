@@ -152,6 +152,10 @@ export interface BootstrapResponse {
   events: ServerEvent[];
   /** Album metadata only — photos are fetched lazily per album (getAlbumPhotos). */
   albums: ServerAlbum[];
+  expenses: ServerExpense[];
+  transfers: ServerTransfer[];
+  /** The family's current-month budget, or null if never set. */
+  budget: ServerBudget | null;
   serverTime: string;
 }
 
@@ -163,6 +167,10 @@ export interface SyncResponse {
   events: ServerEvent[];
   /** Full current list, like grocery/tasks/events (photos are NOT synced — refetch per album). */
   albums: ServerAlbum[];
+  /** Full current list, like grocery/tasks/events. */
+  expenses: ServerExpense[];
+  transfers: ServerTransfer[];
+  budget: ServerBudget | null;
   serverTime: string;
 }
 
@@ -464,6 +472,87 @@ export function uploadPhoto(
 
 export function removePhotoItem(token: string, id: string) {
   return api<{ id: string; albumId: string }>(`/photos/${id}`, { method: 'DELETE', token });
+}
+
+// ── Family Finance (Phase I) ──────────────────────────────────
+
+export type CategoryId = 'food' | 'stay' | 'trans' | 'gear' | 'refund';
+
+export interface ServerExpense {
+  id: string;
+  familyId: string;
+  label: string;
+  categoryId: CategoryId;
+  amount: number;
+  paidBy: string;
+  /** User ids. */
+  splitAmong: string[];
+  /** '/uploads/<name>' receipt photo, or null. */
+  receiptPath: string | null;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export interface ServerTransfer {
+  id: string;
+  familyId: string;
+  fromId: string;
+  toId: string;
+  amount: number;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export interface ServerBudget {
+  /** 'YYYY-MM'. */
+  month: string;
+  amount: number;
+}
+
+export interface ReceiptScan {
+  merchant: string | null;
+  total: number | null;
+  currency: string | null;
+  /** 'YYYY-MM-DD', or null. */
+  date: string | null;
+  items: { label: string; amount: number }[];
+  suggestedCategory: CategoryId;
+}
+
+export interface ScanReceiptResponse {
+  receiptPath: string;
+  scan: ReceiptScan | null;
+  /** Present when the scan itself failed (e.g. AI unconfigured) — the upload still succeeded. */
+  scanError?: string;
+}
+
+export function addExpense(
+  token: string,
+  input: { id: string; label: string; categoryId: CategoryId; amount: number; paidBy: string; splitAmong: string[]; receiptPath?: string },
+) {
+  return api<{ expense: ServerExpense }>('/expenses', { method: 'POST', body: input, token });
+}
+
+export function removeExpense(token: string, id: string) {
+  return api<{ id: string }>(`/expenses/${id}`, { method: 'DELETE', token });
+}
+
+export function addTransfer(token: string, input: { id: string; toId: string; amount: number }) {
+  return api<{ transfer: ServerTransfer }>('/transfers', { method: 'POST', body: input, token });
+}
+
+export function putBudget(token: string, input: { month?: string; amount: number }) {
+  return api<{ budget: ServerBudget }>('/budget', { method: 'PUT', body: input, token });
+}
+
+export function remindPayment(token: string, input: { toUserId: string; amount: number }) {
+  return api<{ ok: true }>('/finance/remind', { method: 'POST', body: input, token });
+}
+
+/** Multipart upload of a receipt photo + best-effort AI scan. Reuses uploadFile — see ScanReceiptResponse for the graceful-degrade shape. */
+export function scanReceiptUpload(token: string, file: UploadFile) {
+  return uploadFile<ScanReceiptResponse>(token, '/finance/scan-receipt', file);
 }
 
 // ── AI: Chat Summary + AI Search (Phase G) ────────────────────
