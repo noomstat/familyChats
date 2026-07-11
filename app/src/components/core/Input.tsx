@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { StyleProp, TextInput, TextInputProps, View, ViewStyle } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Pressable, StyleProp, TextInput, TextInputProps, View, ViewStyle } from 'react-native';
 import { semantic, fontFamily, fontSize, control, radius, shadow } from '../../theme';
 
 export interface InputProps
@@ -50,11 +50,18 @@ export function Input({
   style,
 }: InputProps) {
   const [focused, setFocused] = useState(false);
+  const inputRef = useRef<TextInput>(null);
   const h = { sm: control.sm, md: control.md, lg: control.lg }[size];
   const borderColor = invalid ? semantic.danger : focused ? semantic.brand : semantic.borderDefault;
 
   return (
-    <View
+    // The whole pill focuses the field: the native TextInput's touch target is
+    // only as tall as its text line, so on iOS taps landing on the pill's
+    // padding or the leading icon would otherwise do nothing (no keyboard).
+    <Pressable
+      onPress={() => inputRef.current?.focus()}
+      disabled={disabled}
+      accessible={false}
       style={[
         {
           flexDirection: 'row',
@@ -74,6 +81,7 @@ export function Input({
     >
       {leading && <View>{leading}</View>}
       <TextInput
+        ref={inputRef}
         value={value}
         defaultValue={defaultValue}
         placeholder={placeholder}
@@ -93,6 +101,7 @@ export function Input({
         placeholderTextColor={semantic.textFaint}
         style={{
           flex: 1,
+          alignSelf: 'stretch',
           minWidth: 0,
           fontFamily: fontFamily.body,
           fontSize: fontSize.bodyMd,
@@ -101,6 +110,6 @@ export function Input({
         }}
       />
       {trailing && <View>{trailing}</View>}
-    </View>
+    </Pressable>
   );
 }
