@@ -58,3 +58,9 @@ Demo login: username `you`, password `family123` (also seeded: `mara`, `dev`, `s
 ## Status
 
 Auth, the Family Space, and all ten features above are implemented end-to-end against a real Postgres + WebSocket backend (`server/`). The app's local Context+reducer store (`app/src/store`) is hydrated from the server (`/bootstrap` + `/sync` + realtime WS events) and persists to `AsyncStorage` for offline reads.
+
+### Known limitations
+
+- **expo-av is deprecated** as of Expo SDK 54 (superseded by `expo-audio`/`expo-video`) — FamilyChats' voice messages (`app/src/audio/voiceRecorder.ts`, `VoiceBubble`) still use it. It works today; migrating off it is tracked separately (see "Out of scope" in project planning docs).
+- **AI features need `ANTHROPIC_API_KEY`** — chat "Catch me up" summaries, AI family search, and receipt scanning all degrade gracefully (a friendly message / manual-entry fallback with the photo attached) when the server has no key configured, rather than erroring.
+- **Android push notifications need a custom dev build** — Expo Go on SDK 53+ dropped remote push support on Android; `expo-notifications` still works for local notifications, but new-message/task pushes on Android require building with EAS/`expo-dev-client` rather than running in Expo Go. iOS push works in Expo Go — verified live against a registered device token end-to-end through the Expo push service (job enqueued, sent, and a delivery ticket accepted; the worker also completed the follow-up receipt check with no delivery error reported).

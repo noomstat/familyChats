@@ -31,9 +31,17 @@ tables, and never connect as any other role.
 **Option A — SSH tunnel** (for the app or a local psql session):
 
 ```bash
-ssh -N -L 5433:localhost:5432 ubuntu@13.228.240.173 &
+ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -N -L 5433:localhost:5432 ubuntu@13.228.240.173 &
 psql "$DATABASE_URL"        # DATABASE_URL in .env points at localhost:5433
 ```
+
+The `ServerAliveInterval`/`ServerAliveCountMax` flags make the tunnel send a
+keepalive probe every 30s and give up after 3 missed replies — without them
+an idle tunnel can die silently (observed: the tunnel dropped overnight while
+the API process kept running, serving stale/failing DB connections until
+restarted). The server also guards against this independently — see
+`server/src/db.js`'s `pool.on('error', ...)` handler, which lets pg recover
+with a fresh client on the next query instead of crashing the process.
 
 **Option B — one-off query over SSH** (no tunnel needed):
 
@@ -55,10 +63,12 @@ DATABASE_URL=postgresql://familychats:<password>@localhost:5433/thfund
 
 ### Schema migrations
 
-Keep DDL in `db/schema.sql` in this repo and apply idempotently
-(`CREATE TABLE IF NOT EXISTS …`). Tables need no schema prefix thanks to
-the role's search_path, but prefix `familychats.` in any SQL executed by
-other roles or cron jobs.
+DDL lives in `server/db/*.sql` (one numbered file per phase, e.g.
+`001_device_tokens.sql`, `002_family_core.sql`, …), applied in order and
+idempotently (`CREATE TABLE IF NOT EXISTS …`, `ON CONFLICT DO NOTHING` for
+seed data) by `server/migrate.js` (`npm run migrate` from `server/`). Tables
+need no schema prefix thanks to the role's search_path, but prefix
+`familychats.` in any SQL executed by other roles or cron jobs.
 
 ## Server notes
 
