@@ -92,7 +92,7 @@ export function AlbumScreen({ navigation, route }: Props) {
       </ScrollView>
 
       <View style={{ paddingHorizontal: 16, paddingBottom: 14, gap: 8 }}>
-        {uploadError && (
+        {!!uploadError && (
           <Text style={{ textAlign: 'center', color: semantic.danger, fontSize: 12 }}>{uploadError}</Text>
         )}
         <Button

@@ -71,7 +71,7 @@ export function LocationTile({
           <Text numberOfLines={1} style={{ fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: fontSize.bodySm }}>
             {label}
           </Text>
-          {meta && <Text style={{ fontFamily: fontFamily.mono, fontSize: 11, color: semantic.textMuted }}>{meta}</Text>}
+          {!!meta && <Text style={{ fontFamily: fontFamily.mono, fontSize: 11, color: semantic.textMuted }}>{meta}</Text>}
         </View>
         <Icon name="chevron-right" size={18} color={semantic.textFaint} />
       </View>

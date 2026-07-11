@@ -52,7 +52,7 @@ export function FamilyGateScreen() {
             </Text>
           </View>
 
-          {error && <Text style={{ color: semantic.danger, fontSize: fontSize.bodySm, textAlign: 'center' }}>{error}</Text>}
+          {!!error && <Text style={{ color: semantic.danger, fontSize: fontSize.bodySm, textAlign: 'center' }}>{error}</Text>}
 
           <Card>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>

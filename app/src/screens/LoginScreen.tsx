@@ -92,7 +92,7 @@ export function LoginScreen() {
             />
           </View>
 
-          {error && (
+          {!!error && (
             <Text style={{ color: semantic.danger, fontSize: fontSize.bodySm, marginTop: space[3], textAlign: 'center' }}>{error}</Text>
           )}
 

@@ -73,7 +73,7 @@ export function NewChatScreen({ navigation }: Props) {
           </View>
         </View>
 
-        {error && <Text style={{ color: semantic.danger, fontSize: 13 }}>{error}</Text>}
+        {!!error && <Text style={{ color: semantic.danger, fontSize: 13 }}>{error}</Text>}
 
         <Button block size="lg" disabled={!canCreate} onPress={create} leadingIcon={<Icon name="plus" size={18} color={colors.white} />}>
           {creating ? 'Creating…' : 'Create chat'}

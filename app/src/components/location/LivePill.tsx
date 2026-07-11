@@ -34,7 +34,7 @@ export function LivePill({ label = 'Sharing live', timeLeft, onStop, compact = f
     >
       <PresenceDot state="live" size={9} />
       <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: fontSize.bodySm, color: colors.ping700 }}>{label}</Text>
-      {timeLeft && (
+      {!!timeLeft && (
         <Text style={{ fontFamily: fontFamily.mono, fontSize: 11, color: colors.ping600 }}>· {timeLeft}</Text>
       )}
       {!compact && onStop && (

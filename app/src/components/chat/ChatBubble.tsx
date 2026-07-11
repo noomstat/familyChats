@@ -37,7 +37,7 @@ export function ChatBubble({ children, mine = false, author, time, showTail = tr
 
   return (
     <View style={[{ alignItems: mine ? 'flex-end' : 'flex-start', maxWidth: '78%' }, style]}>
-      {author && !mine && (
+      {!!author && !mine && (
         <Text style={{ fontSize: fontSize.caption, fontFamily: fontFamily.bodySemibold, color: semantic.textMuted, marginBottom: 3, marginLeft: 12 }}>
           {author}
         </Text>
@@ -67,7 +67,7 @@ export function ChatBubble({ children, mine = false, author, time, showTail = tr
           </View>
         )}
       </View>
-      {time && (
+      {!!time && (
         <Text style={{ fontFamily: fontFamily.mono, fontSize: 10, color: semantic.textFaint, marginTop: 4, marginRight: mine ? 8 : 0, marginLeft: mine ? 0 : 12 }}>
           {time}
         </Text>

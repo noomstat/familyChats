@@ -165,8 +165,8 @@ function GroceryRow({
       >
         {item.label}
       </Text>
-      {item.qty && <Chip tone="neutral">{item.qty}</Chip>}
-      {checked && checkerName && <Avatar name={checkerName} size={22} />}
+      {!!item.qty && <Chip tone="neutral">{item.qty}</Chip>}
+      {checked && !!checkerName && <Avatar name={checkerName} size={22} />}
     </Pressable>
   );
 }

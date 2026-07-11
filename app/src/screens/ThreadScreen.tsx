@@ -222,7 +222,7 @@ export function ThreadScreen({ route, navigation }: Props) {
         />
 
         {/* composer */}
-        {micWarning && (
+        {!!micWarning && (
           <Text style={{ fontSize: 12, color: colors.rose500, paddingHorizontal: 16, paddingTop: 6, backgroundColor: semantic.surfaceCard }}>
             {micWarning}
           </Text>

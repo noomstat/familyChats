@@ -87,7 +87,7 @@ export function MemoriesScreen({ navigation }: Props) {
         />
       )}
 
-      {error && <Text style={{ textAlign: 'center', color: semantic.danger, fontSize: 12, paddingBottom: 10 }}>{error}</Text>}
+      {!!error && <Text style={{ textAlign: 'center', color: semantic.danger, fontSize: 12, paddingBottom: 10 }}>{error}</Text>}
     </SafeAreaView>
   );
 }

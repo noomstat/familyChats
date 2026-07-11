@@ -136,7 +136,7 @@ export function FinanceScreen({ navigation }: Props) {
 
       {adding && <AddExpenseSheet members={members} me={session?.userId} onClose={() => setAdding(false)} />}
       {settingBudget && <SetBudgetSheet current={finance.budget?.amount} onClose={() => setSettingBudget(false)} />}
-      {previewUri && <ReceiptPreview uri={previewUri} onClose={() => setPreviewUri(null)} />}
+      {!!previewUri && <ReceiptPreview uri={previewUri} onClose={() => setPreviewUri(null)} />}
     </SafeAreaView>
   );
 }
@@ -265,7 +265,7 @@ function RecentExpenses({
               </Text>
               <Text style={{ fontSize: 11, color: semantic.textMuted }}>{nameOf(e.paidBy)} paid</Text>
             </View>
-            {e.receiptPath && (
+            {!!e.receiptPath && (
               <Pressable onPress={() => onPreview(fileUrl(e.receiptPath!))}>
                 <Image source={{ uri: fileUrl(e.receiptPath) }} style={{ width: 28, height: 28, borderRadius: 6 }} />
               </Pressable>
@@ -275,7 +275,7 @@ function RecentExpenses({
           </Pressable>
         );
       })}
-      {confirmingId && (
+      {!!confirmingId && (
         <Text style={{ fontSize: 11, color: semantic.textFaint, marginHorizontal: 4, marginTop: 2 }}>Long-press again — tap the highlighted row to delete.</Text>
       )}
     </View>
@@ -441,13 +441,13 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
         >
           {scanning ? 'Scanning…' : 'Scan receipt'}
         </Button>
-        {previewUri && (
+        {!!previewUri && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <Image source={{ uri: previewUri }} style={{ width: 44, height: 44, borderRadius: radius.md }} />
-            {scanHint && <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>{scanHint}</Text>}
+            {!!scanHint && <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>{scanHint}</Text>}
           </View>
         )}
-        {!previewUri && scanHint && <Text style={{ fontSize: 12, color: semantic.textMuted }}>{scanHint}</Text>}
+        {!previewUri && !!scanHint && <Text style={{ fontSize: 12, color: semantic.textMuted }}>{scanHint}</Text>}
 
         <Field label="What was it for?">
           <Input value={label} onChangeText={setLabel} placeholder="e.g. Groceries" />
