@@ -541,6 +541,14 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+// Module-level (not per-provider-instance) so it survives re-renders without
+// extra state: the last read-cursor ts we actually POSTed per group. Guards
+// markRead() below against network spam — ThreadScreen calls markRead() on
+// every `msgs.length` change while focused, but once we've already posted a
+// cursor at/after the newest message's ts, re-posting the same "caught up"
+// state on every subsequent render is pure waste.
+const lastPostedReadTs = new Map<string, number>();
+
 export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, seedState);
 
@@ -682,7 +690,16 @@ export function useActions() {
         const now = Date.now();
         dispatch({ type: 'MARK_READ', groupId });
         if (userId) dispatch({ type: 'MERGE_READ', groupId, userId, ts: now });
-        if (token) postRead(token, groupId, new Date(now).toISOString()).catch((err) => console.warn('[store] markRead failed', err));
+        if (!token) return;
+        // Skip the POST once we've already told the server we're caught up
+        // to the newest message — avoids re-posting a read cursor on every
+        // `msgs.length` re-render while the thread stays focused (see
+        // lastPostedReadTs above).
+        const msgs = state.messages[groupId];
+        const newestTs = msgs?.length ? msgs[msgs.length - 1].ts : 0;
+        if ((lastPostedReadTs.get(groupId) ?? 0) >= newestTs) return;
+        lastPostedReadTs.set(groupId, now);
+        postRead(token, groupId, new Date(now).toISOString()).catch((err) => console.warn('[store] markRead failed', err));
       },
 
       loadEarlier: async (groupId: string) => {

@@ -36,6 +36,10 @@ export function VoiceBubble({ mediaPath, durationMs = 0, mine = false }: VoiceBu
   const [playing, setPlaying] = useState(false);
   const [progressMs, setProgressMs] = useState(0);
   const [totalMs, setTotalMs] = useState(durationMs);
+  // Set when playback fails outright (e.g. an iOS AV player handed a web
+  // recording's webm clip, which it can't decode) — swaps the player UI for
+  // an inline "can't play" caption instead of a silently-dead play button.
+  const [unplayable, setUnplayable] = useState(false);
   const soundRef = useRef<Audio.Sound | null>(null);
 
   // Unload on unmount (message scrolled out / thread closed) and release the
@@ -88,6 +92,7 @@ export function VoiceBubble({ mediaPath, durationMs = 0, mine = false }: VoiceBu
       currentSetPlaying = setPlaying;
     } catch (err) {
       console.warn('[VoiceBubble] playback failed', err);
+      setUnplayable(true);
     }
   };
 
@@ -95,6 +100,28 @@ export function VoiceBubble({ mediaPath, durationMs = 0, mine = false }: VoiceBu
   const fg = mine ? colors.white : colors.coral600;
   const track = mine ? 'rgba(255,255,255,0.35)' : semantic.borderDefault;
   const label = playing || progressMs > 0 ? fmt(progressMs) : fmt(totalMs);
+
+  if (unplayable) {
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 170, paddingVertical: 2 }}>
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: radius.full,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: mine ? 'rgba(255,255,255,0.22)' : semantic.brandSoft,
+          }}
+        >
+          <Icon name="mic-off" size={15} color={fg} />
+        </View>
+        <Text style={{ fontFamily: fontFamily.body, fontSize: fontSize.micro, color: mine ? 'rgba(255,255,255,0.85)' : semantic.textMuted, flex: 1 }}>
+          Can't play on this device
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 170, paddingVertical: 2 }}>
