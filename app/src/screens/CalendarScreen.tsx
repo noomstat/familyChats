@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
@@ -371,7 +371,7 @@ function EventSheet({ mode, event, baseDate, onClose }: EventSheetProps) {
   };
 
   return (
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}>
       <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
       <ScrollView
         style={{ maxHeight: '88%' }}
@@ -442,6 +442,6 @@ function EventSheet({ mode, event, baseDate, onClose }: EventSheetProps) {
           {mode === 'edit' ? 'Save' : 'Add event'}
         </Button>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
