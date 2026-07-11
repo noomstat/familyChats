@@ -7,6 +7,12 @@ import { query } from './db.js';
 
 const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 
+// Sessions never expired before this — inactive tokens would authenticate
+// forever. 30 days of inactivity (no request touching last_seen) invalidates
+// a session; an actively-used session never hits this because requireAuth
+// below bumps last_seen to now() on every request.
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 function badRequest(message) {
   const err = new Error(message);
   err.status = 400;
@@ -80,22 +86,34 @@ export async function logout(token) {
   await query('DELETE FROM sessions WHERE token = $1', [token]);
 }
 
-/** Look up the user behind a session token, or null if the token is invalid. */
+/**
+ * Look up the user behind a session token, or null if the token is invalid
+ * or expired (last_seen older than SESSION_TTL_MS — lazily deleted on the
+ * way out, since there's no need to keep a dead session row around).
+ */
 export async function getSessionUser(token) {
   if (!token) return null;
   const { rows } = await query(
-    `SELECT u.id, u.username, u.name
+    `SELECT u.id, u.username, u.name, s.last_seen
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token = $1`,
     [token],
   );
-  return toPublicUser(rows[0]) ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  if (Date.now() - row.last_seen.getTime() > SESSION_TTL_MS) {
+    await query('DELETE FROM sessions WHERE token = $1', [token]);
+    return null;
+  }
+  return toPublicUser(row);
 }
 
 /**
  * Express middleware: requires `Authorization: Bearer <token>`, attaches
- * `req.user = { id, username, name }`, and touches the session's last_seen.
- * Responds 401 on a missing/invalid/expired token.
+ * `req.user = { id, username, name }`, and touches the session's last_seen —
+ * which is exactly what keeps an actively-used session from ever hitting
+ * getSessionUser's 30-day expiry (that check only bites a token nobody has
+ * used in that long). Responds 401 on a missing/invalid token.
  */
 export async function requireAuth(req, res, next) {
   try {
