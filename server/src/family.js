@@ -3,6 +3,7 @@
 // before offering "create" or "join" again.
 import crypto from 'node:crypto';
 import { pool, query } from './db.js';
+import { broadcastToFamily } from './ws.js';
 
 // Unambiguous alphabet for invite codes: A-Z minus I/O (look like 1/0), plus 2-9.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -105,7 +106,7 @@ export async function joinFamily({ code, userId }) {
  */
 export async function getFamilyForUser(userId) {
   const { rows } = await query(
-    `SELECT f.id, f.name, f.invite_code, fm.role
+    `SELECT f.id, f.name, f.invite_code, f.e2ee, fm.role
      FROM family_members fm JOIN families f ON f.id = fm.family_id
      WHERE fm.user_id = $1
      ORDER BY fm.joined_at ASC
@@ -117,9 +118,34 @@ export async function getFamilyForUser(userId) {
 
   const members = await memberRows(row.id);
   return {
-    family: { id: row.id, name: row.name, inviteCode: row.invite_code, role: row.role },
+    family: { id: row.id, name: row.name, inviteCode: row.invite_code, role: row.role, e2ee: row.e2ee },
     members,
   };
+}
+
+/**
+ * Turns on end-to-end encryption for a family. Owner-only, one-way (no
+ * disable in v1 — flipping it back off would leave a mixed plaintext/
+ * ciphertext history with no clean way to explain which messages are
+ * readable, so we simply don't offer it). The server never sees the key:
+ * this just flips the enforcement flag that createMessage() checks.
+ */
+export async function setE2EE({ familyId, userId, enabled }) {
+  if (enabled !== true) throw badRequest('only enabling e2ee is supported');
+  const { rows } = await query(
+    'SELECT role FROM family_members WHERE family_id = $1 AND user_id = $2',
+    [familyId, userId],
+  );
+  if (!rows[0]) throw notFound('not a member of this family');
+  if (rows[0].role !== 'owner') throw forbidden('only the family owner can enable encryption');
+
+  await query('UPDATE families SET e2ee = true WHERE id = $1', [familyId]);
+  const found = await getFamilyForUser(userId);
+  // Every member's client needs to know the flag flipped (so it starts
+  // rejecting/expecting envelopes and shows the locked-state UI) — same
+  // broadcast pattern as group upserts in chat.js.
+  await broadcastToFamily(familyId, { type: 'family', action: 'upsert', family: found.family });
+  return found;
 }
 
 /** Rotate a family's invite code. Owner-only. */

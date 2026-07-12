@@ -81,6 +81,16 @@ export function useRealtime(): void {
           case 'group':
             dispatch({ type: 'GROUP_UPSERT', group: data.group });
             break;
+          case 'family':
+            // Phase K — broadcast when the owner flips e2ee on (see
+            // family.js's setE2EE). SET_FAMILY expects the full FamilyState
+            // shape (incl. `members`), which the family event doesn't carry,
+            // so merge the flag change onto whatever family state we already
+            // have rather than dropping members to [].
+            if (data.action === 'upsert' && data.family) {
+              dispatch({ type: 'FAMILY_PATCH', patch: { id: data.family.id, name: data.family.name, inviteCode: data.family.inviteCode, e2ee: data.family.e2ee } });
+            }
+            break;
           case 'grocery':
             if (data.action === 'upsert') dispatch({ type: 'GROCERY_UPSERT', item: data.item });
             else if (data.action === 'remove') dispatch({ type: 'GROCERY_REMOVE', id: data.ids?.[0] });

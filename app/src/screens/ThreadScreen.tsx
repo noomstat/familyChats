@@ -14,6 +14,7 @@ import {
   ChatGroup,
   Message,
   useActions,
+  useE2EE,
   useFamily,
   useHasMore,
   useLive,
@@ -45,10 +46,12 @@ export function ThreadScreen({ route, navigation }: Props) {
   const live = useLive(routeGroup.id);
   const sharing = !!live;
   const actions = useActions();
+  const { enabled: e2ee, hasKey } = useE2EE();
   const [draft, setDraft] = useState('');
   const [sheet, setSheet] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [keySheetOpen, setKeySheetOpen] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -97,6 +100,10 @@ export function ThreadScreen({ route, navigation }: Props) {
   }, [msgs.length, group.id, actions]);
 
   const inverted = useMemo(() => [...msgs].reverse(), [msgs]);
+  // Show the "enter your key" banner only once we've actually seen a locked
+  // message — a brand-new e2ee family with no history yet has nothing to
+  // unlock, so there's no reason to nag before the first encrypted message arrives.
+  const hasLocked = useMemo(() => msgs.some((m) => m.locked), [msgs]);
 
   const send = () => {
     if (!draft.trim()) return;
@@ -179,7 +186,10 @@ export function ThreadScreen({ route, navigation }: Props) {
         <IconButton name="chevron-left" variant="ghost" accessibilityLabel="Back" onPress={() => navigation.goBack()} />
         <Avatar name={group.name} size={40} presence={sharing ? 'live' : null} />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 17, color: semantic.textStrong }}>{group.name}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 17, color: semantic.textStrong }}>{group.name}</Text>
+            {e2ee && <Icon name="lock" size={13} color={semantic.textMuted} />}
+          </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
             {sharing ? (
               <>
@@ -222,6 +232,16 @@ export function ThreadScreen({ route, navigation }: Props) {
         />
 
         {/* composer */}
+        {hasLocked && !hasKey && (
+          <Pressable
+            onPress={() => setKeySheetOpen(true)}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: semantic.surfaceSunk, borderTopWidth: 1, borderTopColor: semantic.borderSubtle }}
+          >
+            <Icon name="lock" size={14} color={semantic.textMuted} />
+            <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>Enter your family key to read messages</Text>
+            <Text style={{ fontSize: 12, fontFamily: fontFamily.bodySemibold, color: semantic.brand }}>Enter key</Text>
+          </Pressable>
+        )}
         {!!micWarning && (
           <Text style={{ fontSize: 12, color: colors.rose500, paddingHorizontal: 16, paddingTop: 6, backgroundColor: semantic.surfaceCard }}>
             {micWarning}
@@ -270,6 +290,7 @@ export function ThreadScreen({ route, navigation }: Props) {
       {summaryOpen && session && (
         <SummarySheet groupId={group.id} token={session.token} onClose={() => setSummaryOpen(false)} />
       )}
+      {keySheetOpen && <ImportKeySheet onClose={() => setKeySheetOpen(false)} />}
       {settingsOpen && (
         <GroupSettingsSheet
           group={group}
@@ -283,6 +304,23 @@ export function ThreadScreen({ route, navigation }: Props) {
 }
 
 function ChatMsg({ m, mine, authorName, read }: { m: Message; mine: boolean; authorName: string; read?: boolean }) {
+  if (m.locked) {
+    // Tamper/wrong-key/no-key — all three render identically here (the app
+    // can't distinguish them, and shouldn't try to guess which).
+    return (
+      <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
+        <ChatBubble mine={mine} author={mine ? undefined : authorName} style={{ opacity: 0.55 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Icon name="lock" size={13} color={mine ? semantic.bubbleMeText : semantic.bubbleThemText} />
+            <Text style={{ fontFamily: fontFamily.body, fontSize: 14, fontStyle: 'italic', color: mine ? semantic.bubbleMeText : semantic.bubbleThemText }}>
+              Encrypted message
+            </Text>
+          </View>
+        </ChatBubble>
+      </View>
+    );
+  }
+
   const attachment = m.loc ? (
     <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
   ) : m.kind === 'voice' && m.mediaPath ? (
@@ -299,6 +337,48 @@ function ChatMsg({ m, mine, authorName, read }: { m: Message; mine: boolean; aut
         </Text>
       )}
     </View>
+  );
+}
+
+/** "Enter your family key" sheet — accepts either a full extended invite or a bare pasted key. */
+function ImportKeySheet({ onClose }: { onClose: () => void }) {
+  const actions = useActions();
+  const [input, setInput] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      await actions.importFamilyKey(input);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not read that key');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}>
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <View style={{ backgroundColor: semantic.surfaceCard, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30, gap: 14, ...shadow.xl }}>
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Icon name="key" size={20} color={colors.coral500} />
+          <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Enter your family key</Text>
+        </View>
+        <Text style={{ fontSize: 14, lineHeight: 20, color: semantic.textMuted }}>
+          Paste the extended invite (with the {'#'} part) or just the key someone shared with you.
+        </Text>
+        <Input value={input} onChangeText={setInput} placeholder="FAM123#K1.… or just the key" autoCapitalize="none" onSubmitEditing={submit} />
+        {!!error && <Text style={{ fontSize: 13, color: semantic.danger }}>{error}</Text>}
+        <Button block variant="primary" disabled={submitting || !input.trim()} onPress={submit}>
+          {submitting ? 'Unlocking…' : 'Unlock messages'}
+        </Button>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -338,15 +418,19 @@ function ShareSheet({ onClose, onConfirm }: { onClose: () => void; onConfirm: (d
 function SummarySheet({ groupId, token, onClose }: { groupId: string; token: string; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<string | null>(null);
+  const [encrypted, setEncrypted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setEncrypted(false);
     getGroupSummary(token, groupId)
       .then((res) => {
-        if (!cancelled) setSummary(res.summary);
+        if (cancelled) return;
+        setSummary(res.summary);
+        setEncrypted(!!res.encrypted);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -383,6 +467,13 @@ function SummarySheet({ groupId, token, onClose }: { groupId: string; token: str
             {error === "AI isn't set up yet." && (
               <Text style={{ fontSize: 12, color: semantic.textFaint }}>Ask whoever runs the server to set ANTHROPIC_API_KEY.</Text>
             )}
+          </View>
+        ) : encrypted ? (
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 4 }}>
+            <Icon name="lock" size={16} color={semantic.textMuted} />
+            <Text style={{ flex: 1, fontSize: 14, lineHeight: 20, color: semantic.textBody }}>
+              This chat is end-to-end encrypted — AI can't summarize it.
+            </Text>
           </View>
         ) : (
           <View style={{ gap: 8 }}>

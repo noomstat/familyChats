@@ -17,6 +17,7 @@ export {
   useSession,
   useFamily,
   useSessionReady,
+  useE2EE,
   useGrocery,
   useTasks,
   useEvents,

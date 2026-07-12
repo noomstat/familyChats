@@ -17,6 +17,10 @@ import { UPLOADS_DIR } from './uploads.js';
 const MODEL = 'claude-haiku-4-5';
 const SUMMARY_MESSAGE_LIMIT = 100;
 const HIT_LIMIT = 40;
+// Phase K — keep in sync with chat.js's ENVELOPE_PREFIX / app's e2ee.ts.
+// The server never decrypts, so an encrypted body is opaque ciphertext —
+// both AI features simply exclude it from what they read.
+const ENVELOPE_PREFIX = 'e2e:1:';
 const RECEIPT_CATEGORY_IDS = new Set(['food', 'stay', 'trans', 'gear', 'refund']);
 const IMAGE_MEDIA_TYPE = {
   '.jpg': 'image/jpeg',
@@ -110,7 +114,16 @@ export async function summarizeGroup(groupId, userId) {
     return { summary: 'No messages yet in this chat.', messageCount: 0 };
   }
 
-  const lines = rows.map((r) => {
+  // Encrypted text/loc rows are opaque ciphertext to the server — drop them
+  // before building the transcript rather than feeding Claude a "e2e:1:…"
+  // string. (An encrypted loc message's payload rides in `body`, same as
+  // text — its `loc` column is NULL — so this one check covers both kinds.)
+  const readable = rows.filter((r) => !r.body?.startsWith(ENVELOPE_PREFIX));
+  if (!readable.length) {
+    return { summary: null, encrypted: true, messageCount: rows.length };
+  }
+
+  const lines = readable.map((r) => {
     if (r.kind === 'loc') return `${r.author_name}: 📍 shared ${r.loc?.label ?? 'a location'}`;
     if (r.kind === 'voice') return `${r.author_name}: 🎤 voice message`;
     return `${r.author_name}: ${r.body ?? ''}`;
@@ -193,10 +206,13 @@ export async function retrieveHits(keywords, userId) {
   {
     const params = [familyId];
     const cond = ilikeAny(['m.body'], kws, params);
+    // Ciphertext bodies would essentially never ILIKE-match a plaintext
+    // keyword anyway, but exclude them explicitly — retrieval should never
+    // even consider encrypted rows, matching the plan's degradation contract.
     const { rows } = await query(
       `SELECT m.id, m.group_id, m.kind, m.body, m.loc, m.ts, g.name AS group_name
        FROM messages m JOIN groups g ON g.id = m.group_id
-       WHERE g.family_id = $1 AND ${cond}
+       WHERE g.family_id = $1 AND m.body NOT LIKE '${ENVELOPE_PREFIX}%' AND ${cond}
        ORDER BY m.ts DESC LIMIT ${HIT_LIMIT}`,
       params,
     );

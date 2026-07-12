@@ -24,6 +24,10 @@ export interface Message {
   mediaPath?: string;
   /** Voice messages only: clip length in ms. */
   durationMs?: number;
+  /** True when this message's body is an E2EE envelope we couldn't decrypt
+   * (no family key yet, or the wrong one). `text`/`loc` are left undefined —
+   * the thread renders a locked bubble instead of the raw ciphertext. */
+  locked?: boolean;
   ts: number;
 }
 

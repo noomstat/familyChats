@@ -12,6 +12,8 @@ import {
   timeLabel,
 } from './model';
 import { tokenStorage } from './tokenStorage';
+import { keyStorage } from './keyStorage';
+import { decryptPayload, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput } from '../crypto/e2ee';
 import {
   BootstrapResponse,
   CategoryId,
@@ -63,6 +65,7 @@ import {
   renameAlbumItem,
   renameGroup as apiRenameGroup,
   scanReceiptUpload,
+  setFamilyE2EE,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
@@ -89,10 +92,19 @@ export interface FamilyState {
   inviteCode: string;
   role: 'owner' | 'member';
   members: FamilyMember[];
+  /** Phase K — true once the owner has turned on end-to-end encryption. One-way (no disable). */
+  e2ee: boolean;
 }
 
 function toFamilyState(info: FamilyInfo): FamilyState {
-  return { id: info.family.id, name: info.family.name, inviteCode: info.family.inviteCode, role: info.family.role, members: info.members };
+  return {
+    id: info.family.id,
+    name: info.family.name,
+    inviteCode: info.family.inviteCode,
+    role: info.family.role,
+    members: info.members,
+    e2ee: info.family.e2ee,
+  };
 }
 
 /** A server-backed chat group (dynamic — created/renamed/joined at runtime). */
@@ -139,11 +151,16 @@ export interface AppState {
   family: FamilyState | null;
   /** True once the initial secure-store token check (and /me call) has settled. */
   sessionReady: boolean;
+  /** Phase K — true once the current family's E2EE key is loaded into the
+   * module-level familyKeyCache (see below). Not persisted — re-derived from
+   * keyStorage each launch, same as session/family. Drives useE2EE()'s
+   * `hasKey` so locked-message UI can react without reading the cache directly. */
+  hasFamilyKey: boolean;
 }
 
 /** The persisted slice — local/offline-read demo + chat cache. Session/family
  * are re-fetched from the server each launch, never cached here. */
-type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'sessionReady'>;
+type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'sessionReady' | 'hasFamilyKey'>;
 
 const seedState: AppState = {
   groups: {},
@@ -165,22 +182,56 @@ const seedState: AppState = {
   session: null,
   family: null,
   sessionReady: false,
+  hasFamilyKey: false,
 };
+
+// ── E2EE family key cache ────────────────────────────────────
+//
+// Module-level (not component state) so fromServerMessage — a plain exported
+// function with no hook access — can decrypt synchronously. v1 is one family
+// per user, so a single slot (not keyed per-family-id beyond the guard below)
+// is sufficient; the familyId is kept alongside the key purely as a staleness
+// guard against a leftover cache entry from a previously-loaded family.
+// Populated: on family load, after enableE2EE(), after importFamilyKey(),
+// and after joinFamily() when the invite carried a key. Cleared on logout.
+// AppState.hasFamilyKey mirrors this for reactive UI (useE2EE()).
+let familyKeyCache: { familyId: string; keyB64: string } | null = null;
 
 // ── Server <-> store message mapping ─────────────────────────
 
 export function fromServerMessage(sm: ServerMessage): Message {
-  return {
+  const base = {
     id: sm.id,
     groupId: sm.groupId,
     authorId: sm.authorId,
     kind: sm.kind,
-    text: sm.body ?? undefined,
-    loc: sm.loc ? { label: sm.loc.label, meta: sm.loc.meta } : undefined,
-    live: sm.loc?.live,
     mediaPath: sm.mediaPath ?? undefined,
     durationMs: sm.durationMs ?? undefined,
     ts: Date.parse(sm.ts),
+  };
+
+  if (isEnvelope(sm.body)) {
+    // v1 is one family per user, so "the" cached key (if any) is always the
+    // right one to try — no groupId -> familyId lookup available here anyway.
+    const keyB64 = familyKeyCache?.keyB64;
+    const decrypted = keyB64 ? decryptPayload(keyB64, sm.body as string) : null;
+    if (decrypted) {
+      return {
+        ...base,
+        text: decrypted.text,
+        loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
+        live: decrypted.loc?.live,
+      };
+    }
+    // No key yet, or decrypt failed (tamper/wrong key) — render locked.
+    return { ...base, locked: true };
+  }
+
+  return {
+    ...base,
+    text: sm.body ?? undefined,
+    loc: sm.loc ? { label: sm.loc.label, meta: sm.loc.meta } : undefined,
+    live: sm.loc?.live,
   };
 }
 
@@ -225,7 +276,9 @@ type Action =
   | { type: 'PHOTO_REMOVE'; id: string; albumId: string }
   | { type: 'SET_SESSION'; session: Session | null }
   | { type: 'SET_FAMILY'; family: FamilyState | null }
+  | { type: 'FAMILY_PATCH'; patch: Partial<FamilyState> & { id: string } }
   | { type: 'SESSION_READY' }
+  | { type: 'SET_HAS_KEY'; value: boolean }
   | { type: 'LOGOUT' };
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -246,7 +299,15 @@ function reducer(state: AppState, action: Action): AppState {
       // (see Persisted), so this can't clobber a session already established
       // by the token-check effect, whichever runs first.
       return action.payload
-        ? { ...seedState, ...action.payload, session: state.session, family: state.family, sessionReady: state.sessionReady, hydrated: true }
+        ? {
+            ...seedState,
+            ...action.payload,
+            session: state.session,
+            family: state.family,
+            sessionReady: state.sessionReady,
+            hasFamilyKey: state.hasFamilyKey,
+            hydrated: true,
+          }
         : { ...state, hydrated: true };
 
     case 'BOOTSTRAP': {
@@ -519,13 +580,23 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_FAMILY':
       return { ...state, family: action.family };
 
+    case 'FAMILY_PATCH':
+      // Realtime `family` events (e.g. the owner enabling e2ee) carry only
+      // the fields that changed, not the full member list — merge onto
+      // whatever family state we already have rather than clobbering it.
+      if (!state.family || state.family.id !== action.patch.id) return state;
+      return { ...state, family: { ...state.family, ...action.patch } };
+
     case 'SESSION_READY':
       return state.sessionReady ? state : { ...state, sessionReady: true };
+
+    case 'SET_HAS_KEY':
+      return state.hasFamilyKey === action.value ? state : { ...state, hasFamilyKey: action.value };
 
     case 'LOGOUT':
       // Clears session+family only — local/cached data stays put (the next
       // login's bootstrap replaces the chat slices wholesale).
-      return { ...state, session: null, family: null };
+      return { ...state, session: null, family: null, hasFamilyKey: false };
 
     default:
       return state;
@@ -571,7 +642,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   // cached in this AsyncStorage blob.
   useEffect(() => {
     if (!state.hydrated) return;
-    const { hydrated: _hydrated, session: _session, family: _family, sessionReady: _sessionReady, ...persisted } = state;
+    const { hydrated: _hydrated, session: _session, family: _family, sessionReady: _sessionReady, hasFamilyKey: _hasFamilyKey, ...persisted } = state;
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(persisted)).catch(() => {});
   }, [state]);
 
@@ -614,6 +685,55 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [state.session?.token]);
 
+  // Phase K — hydrate the E2EE key cache whenever the current family changes
+  // (fresh login into an e2ee family, or create/join within this session).
+  // This local storage read usually resolves well before the bootstrap
+  // effect's network fetch above, so messages typically decrypt on the very
+  // first BOOTSTRAP dispatch. If it doesn't win that race, re-running
+  // bootstrap once here (only when a key was actually found) re-maps
+  // everything through fromServerMessage now that the cache is populated —
+  // cheap, and only ever happens for e2ee families the user already has the
+  // key for.
+  useEffect(() => {
+    const familyId = state.family?.id;
+    if (!familyId) {
+      familyKeyCache = null;
+      dispatch({ type: 'SET_HAS_KEY', value: false });
+      return;
+    }
+    let cancelled = false;
+    keyStorage
+      .get(familyId)
+      .then((keyB64) => {
+        if (cancelled) return;
+        if (!keyB64) {
+          familyKeyCache = null;
+          dispatch({ type: 'SET_HAS_KEY', value: false });
+          return;
+        }
+        familyKeyCache = { familyId, keyB64 };
+        dispatch({ type: 'SET_HAS_KEY', value: true });
+        const token = state.session?.token;
+        if (token) {
+          getBootstrap(token)
+            .then((payload) => {
+              if (!cancelled) dispatch({ type: 'BOOTSTRAP', payload });
+            })
+            .catch((err) => console.warn('[store] re-bootstrap after key load failed', err));
+        }
+      })
+      .catch((err) => {
+        console.warn('[store] key hydration failed', err);
+        if (!cancelled) {
+          familyKeyCache = null;
+          dispatch({ type: 'SET_HAS_KEY', value: false });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.family?.id]);
+
   const value = useMemo(() => ({ state, dispatch }), [state]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
@@ -639,15 +759,22 @@ export function useActions() {
 
   return useMemo(
     () => ({
+      // Optimistic local message always stores plaintext (so the sender sees
+      // their own text/location immediately) — only the wire body is ever
+      // enveloped, and only when the family has e2ee on AND we actually hold
+      // its key (the familyId guard defends against a stale cache entry).
       sendMessage: (groupId: string, text: string) => {
         const authorId = state.session?.userId;
         if (!authorId) return;
         const id = uid();
         const msg: Message = { id, groupId, authorId, kind: 'text', text, ts: Date.now() };
         dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
-        if (token) {
-          postMessage(token, groupId, { id, kind: 'text', body: text }).catch((err) => console.warn('[store] sendMessage failed', err));
-        }
+        if (!token) return;
+        const key = state.family?.e2ee && familyKeyCache?.familyId === state.family.id ? familyKeyCache.keyB64 : null;
+        const bodyPromise = key ? encryptPayload(key, { text }) : Promise.resolve(text);
+        bodyPromise
+          .then((body) => postMessage(token, groupId, { id, kind: 'text', body }))
+          .catch((err) => console.warn('[store] sendMessage failed', err));
       },
 
       sendLocation: (groupId: string, label: string, meta: string, live?: boolean) => {
@@ -657,7 +784,15 @@ export function useActions() {
         const loc = { label, meta };
         const msg: Message = { id, groupId, authorId, kind: 'loc', loc, live, ts: Date.now() };
         dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
-        if (token) {
+        if (!token) return;
+        const key = state.family?.e2ee && familyKeyCache?.familyId === state.family.id ? familyKeyCache.keyB64 : null;
+        if (key) {
+          // Encrypted loc rides inside the envelope body — the server's `loc`
+          // column stays NULL for this message (see chat.js's createMessage).
+          encryptPayload(key, { loc: { ...loc, live } })
+            .then((body) => postMessage(token, groupId, { id, kind: 'loc', body }))
+            .catch((err) => console.warn('[store] sendLocation failed', err));
+        } else {
           postMessage(token, groupId, { id, kind: 'loc', loc, live }).catch((err) => console.warn('[store] sendLocation failed', err));
         }
       },
@@ -1066,19 +1201,83 @@ export function useActions() {
           // Non-fatal — the token may already be expired/gone server-side.
         }
         await tokenStorage.clear().catch(() => {});
+        familyKeyCache = null;
         dispatch({ type: 'LOGOUT' });
       },
 
-      createFamily: async (name: string) => {
+      /**
+       * New families are E2EE by default (see plan) — this generates+stores
+       * the key and flips the server flag as part of the same call, before
+       * ever exposing the family to the UI, rather than chaining a separate
+       * enableE2EE() call (which would race a stale `state.family` closure
+       * from the render that kicked off createFamily). Returns the raw key
+       * alongside the family so the caller can show/share the extended
+       * invite immediately — it's never retrievable from the server again.
+       */
+      createFamily: async (name: string): Promise<{ family: FamilyState; keyB64: string }> => {
         if (!token) throw new Error('not signed in');
         const info = await apiCreateFamily(token, name);
-        dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
+        const familyId = info.family.id;
+        const keyB64 = await generateFamilyKey();
+        await keyStorage.set(familyId, keyB64);
+        familyKeyCache = { familyId, keyB64 };
+        dispatch({ type: 'SET_HAS_KEY', value: true });
+        const enabledInfo = await setFamilyE2EE(token);
+        const family = toFamilyState(enabledInfo);
+        dispatch({ type: 'SET_FAMILY', family });
+        return { family, keyB64 };
       },
 
-      joinFamily: async (code: string) => {
+      /** `keyB64` comes from parseInvite() when the pasted invite was the extended form (`CODE#K1.<key>`). */
+      joinFamily: async (code: string, keyB64?: string) => {
         if (!token) throw new Error('not signed in');
         const info = await apiJoinFamily(token, code);
+        const family = toFamilyState(info);
+        if (keyB64) {
+          await keyStorage.set(family.id, keyB64);
+          familyKeyCache = { familyId: family.id, keyB64 };
+          dispatch({ type: 'SET_HAS_KEY', value: true });
+        }
+        dispatch({ type: 'SET_FAMILY', family });
+      },
+
+      /**
+       * Owner-only, one-way: generates a fresh family key, stores it locally,
+       * flips the server flag, and returns the raw key so the caller (the
+       * "save this key" UI) can build/share the extended invite. Nothing
+       * needs re-decrypting here — there's no encrypted history yet the
+       * moment encryption turns on.
+       */
+      enableE2EE: async (): Promise<string> => {
+        if (!token || !state.family) throw new Error('not signed in or not in a family');
+        const familyId = state.family.id;
+        const keyB64 = await generateFamilyKey();
+        await keyStorage.set(familyId, keyB64);
+        familyKeyCache = { familyId, keyB64 };
+        dispatch({ type: 'SET_HAS_KEY', value: true });
+        const info = await setFamilyE2EE(token);
         dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
+        return keyB64;
+      },
+
+      /**
+       * "Enter your family key" flow: accepts either a full extended invite
+       * or a bare pasted key, stores it, then re-runs bootstrap so every
+       * currently-locked message re-maps through fromServerMessage with the
+       * now-populated cache.
+       */
+      importFamilyKey: async (input: string): Promise<void> => {
+        if (!state.family) throw new Error('not in a family');
+        const keyB64 = parseKeyInput(input);
+        if (!keyB64) throw new Error("That doesn't look like a valid family key");
+        const familyId = state.family.id;
+        await keyStorage.set(familyId, keyB64);
+        familyKeyCache = { familyId, keyB64 };
+        dispatch({ type: 'SET_HAS_KEY', value: true });
+        if (token) {
+          const payload = await getBootstrap(token);
+          dispatch({ type: 'BOOTSTRAP', payload });
+        }
       },
     }),
     [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events, state.albums],
@@ -1100,6 +1299,7 @@ export interface ChatRow {
 function messagePreview(m: Message | undefined, myId: string | undefined, nameOf: (id: string) => string): string {
   if (!m) return 'No messages yet';
   const who = m.authorId === myId ? 'You: ' : `${nameOf(m.authorId)}: `;
+  if (m.locked) return `${who}🔒 Message`;
   if (m.kind === 'loc') return `${who}📍 ${m.loc?.label ?? 'shared a location'}`;
   if (m.kind === 'voice') return `${who}🎤 Voice message`;
   return `${who}${m.text ?? ''}`.trim();
@@ -1216,6 +1416,14 @@ export function useFamily(): FamilyState | null {
  * use this to avoid flashing the login screen while that check is in flight. */
 export function useSessionReady(): boolean {
   return useCtx().state.sessionReady;
+}
+
+/** Phase K — `enabled`: the family has turned on E2EE (server flag). `hasKey`:
+ * this device holds the family key (from enabling it, importing it, or
+ * joining via an extended invite) — false means locked-message UI should show. */
+export function useE2EE(): { enabled: boolean; hasKey: boolean } {
+  const { state } = useCtx();
+  return { enabled: !!state.family?.e2ee, hasKey: state.hasFamilyKey };
 }
 
 /** The shared grocery list, sorted unchecked-first then by creation order. */

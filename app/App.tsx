@@ -9,7 +9,7 @@ import { RootNavigator } from './src/navigation/RootNavigator';
 import { useFamilyChatsFonts } from './src/theme';
 import { semantic } from './src/theme';
 import { AppStoreProvider, useFamily, useRealtime, useSession, useSessionReady } from './src/store';
-import { LoginScreen, FamilyGateScreen } from './src/screens';
+import { LoginScreen, FamilyGateScreen, SaveFamilyKeyScreen } from './src/screens';
 import { usePushRegistration } from './src/notifications/registerPushToken';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -31,9 +31,14 @@ function Gate() {
   const family = useFamily();
   usePushRegistration(session?.token);
   useRealtime();
+  // Held open right after creating a brand-new (E2EE-by-default) family, so
+  // the one-time extended invite has somewhere to be shown/shared before
+  // `family` being set would otherwise swap straight to the main tabs.
+  const [pendingInvite, setPendingInvite] = React.useState<string | null>(null);
 
   if (!session) return <LoginScreen />;
-  if (!family) return <FamilyGateScreen />;
+  if (!family) return <FamilyGateScreen onCreatedWithKey={setPendingInvite} />;
+  if (pendingInvite) return <SaveFamilyKeyScreen invite={pendingInvite} onDone={() => setPendingInvite(null)} />;
   return <RootNavigator />;
 }
 

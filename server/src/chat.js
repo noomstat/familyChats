@@ -12,6 +12,15 @@ import { getFinance } from './finance.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
+// Phase K — E2EE envelope prefix. The server never decrypts; it only checks
+// for this prefix to (a) enforce that e2ee families' text/loc messages are
+// actually encrypted, and (b) degrade the push preview so plaintext never
+// leaves the device. Keep in sync with app/src/crypto/e2ee.ts's ENVELOPE_PREFIX.
+const ENVELOPE_PREFIX = 'e2e:1:';
+function isEnvelope(body) {
+  return typeof body === 'string' && body.startsWith(ENVELOPE_PREFIX);
+}
+
 function notFound(message) {
   const err = new Error(message);
   err.status = 404;
@@ -52,6 +61,11 @@ async function userFamilyId(userId) {
 async function groupMeta(groupId) {
   const { rows } = await query('SELECT id, family_id, name, created_by FROM groups WHERE id = $1', [groupId]);
   return rows[0] ?? null;
+}
+
+async function familyE2EE(familyId) {
+  const { rows } = await query('SELECT e2ee FROM families WHERE id = $1', [familyId]);
+  return !!rows[0]?.e2ee;
 }
 
 async function groupMemberIds(groupId) {
@@ -237,6 +251,16 @@ export async function createMessage({ id, groupId, authorId, kind = 'text', body
   const group = await assertMember(groupId, authorId);
   if (!['text', 'loc', 'voice'].includes(kind)) throw badRequest('invalid kind');
 
+  // E2EE enforcement (server never decrypts — it only checks shape): once a
+  // family has turned encryption on, its text/loc messages MUST arrive as an
+  // envelope. Voice stays unencrypted in v1 (files, not covered — see plan's
+  // out-of-scope list), so it's exempt. An encrypted loc message carries its
+  // {label, meta, live} inside the envelope instead of the `loc` column —
+  // the app-side mapping reads it back out of the decrypted body.
+  if (kind !== 'voice' && (await familyE2EE(group.family_id)) && !isEnvelope(body)) {
+    throw badRequest('family requires encrypted messages');
+  }
+
   const storedLoc = loc ? { ...loc, ...(live ? { live: true } : {}) } : null;
 
   const { rows } = await query(
@@ -261,11 +285,14 @@ export async function createMessage({ id, groupId, authorId, kind = 'text', body
   if (recipients.length) {
     const { rows: authorRows } = await query('SELECT name FROM users WHERE id = $1', [authorId]);
     const authorName = authorRows[0]?.name ?? 'Someone';
-    const preview = kind === 'voice' ? '🎤 Voice message' : (body || '📍 shared a location');
+    // Encrypted bodies must never leak into a push payload — the server
+    // can't read them either, but even echoing the ciphertext string back
+    // out via a notification would be a needless exposure surface.
+    const preview = isEnvelope(body) ? '🔒 New message' : kind === 'voice' ? '🎤 Voice message' : (body || '📍 shared a location');
     await notifyUsers({
       userIds: recipients,
       title: group.name,
-      body: `${authorName}: ${preview}`,
+      body: isEnvelope(body) ? preview : `${authorName}: ${preview}`,
       data: { type: 'message', groupId },
     });
   }

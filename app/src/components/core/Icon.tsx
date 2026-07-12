@@ -52,6 +52,9 @@ import {
   Pause,
   Wallet,
   Banknote,
+  Shield,
+  KeyRound,
+  Copy,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -112,6 +115,9 @@ const REGISTRY: Record<string, LucideIcon> = {
   pause: Pause,
   wallet: Wallet,
   banknote: Banknote,
+  shield: Shield,
+  key: KeyRound,
+  copy: Copy,
 };
 
 export type IconName = keyof typeof REGISTRY;

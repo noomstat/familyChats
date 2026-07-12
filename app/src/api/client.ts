@@ -31,6 +31,8 @@ export interface FamilyInfo {
     name: string;
     inviteCode: string;
     role: 'owner' | 'member';
+    /** Phase K — true once the owner has turned on end-to-end encryption. One-way (no disable). */
+    e2ee: boolean;
   };
   members: FamilyMember[];
 }
@@ -101,6 +103,11 @@ export function joinFamily(token: string, code: string) {
 
 export function regenerateFamilyCode(token: string) {
   return api<FamilyInfo>('/families/regenerate-code', { method: 'POST', token });
+}
+
+/** Owner-only, one-way: turns on end-to-end encryption for the caller's family. */
+export function setFamilyE2EE(token: string) {
+  return api<FamilyInfo>('/families/e2ee', { method: 'POST', body: { enabled: true }, token });
 }
 
 export function getFamilyMembers(token: string) {
@@ -558,8 +565,11 @@ export function scanReceiptUpload(token: string, file: UploadFile) {
 // ── AI: Chat Summary + AI Search (Phase G) ────────────────────
 
 export interface GroupSummaryResponse {
-  summary: string;
+  /** null when every message in range is encrypted (see `encrypted`) — AI can't read them. */
+  summary: string | null;
   messageCount: number;
+  /** True when the chat is end-to-end encrypted and there was nothing readable left to summarize. */
+  encrypted?: boolean;
 }
 
 /** 4-6 bullet catch-up for the last ~100 messages in a group. Throws (with a friendly message) if AI isn't configured server-side. */
