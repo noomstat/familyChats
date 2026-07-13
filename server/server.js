@@ -35,6 +35,7 @@ import {
 } from './src/lists.js';
 import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js';
 import { listNotes, addNote, updateNote, removeNote } from './src/notes.js';
+import { publishKey, getFriends, getMyFriendCode, connectByQr } from './src/friends.js';
 import { upload, UPLOADS_DIR } from './src/uploads.js';
 import {
   listAlbums,
@@ -344,6 +345,50 @@ app.delete('/groups/:id/members/:userId', requireAuth, resolveFamily, async (req
   try {
     const group = await removeMember({ groupId: req.params.id, actorId: req.user.id, userId: req.params.userId });
     res.json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Friends (Phase U) ────────────────────────────────────────
+//
+// User-level and family-independent — no resolveFamily middleware needed,
+// since friends.js never touches the active-family request context. A
+// friendship is between two users regardless of which family/families
+// either belongs to.
+
+app.post('/friends/keys', requireAuth, async (req, res, next) => {
+  try {
+    const result = await publishKey({ userId: req.user.id, publicKey: req.body?.publicKey });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/friends', requireAuth, async (req, res, next) => {
+  try {
+    const friends = await getFriends(req.user.id);
+    res.json({ friends });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/friends/code', requireAuth, async (req, res, next) => {
+  try {
+    const code = await getMyFriendCode(req.user.id);
+    res.json(code);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/friends/connect', requireAuth, async (req, res, next) => {
+  try {
+    const { friendId, token, myPublicKey } = req.body ?? {};
+    const friend = await connectByQr({ userId: req.user.id, friendId, token, myPublicKey });
+    res.status(201).json({ friend });
   } catch (err) {
     next(err);
   }

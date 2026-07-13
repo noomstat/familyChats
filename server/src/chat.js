@@ -11,6 +11,7 @@ import { listAlbums } from './albums.js';
 import { getFinance, listCategories } from './finance.js';
 import { listKeyRolls } from './family.js';
 import { listNotes } from './notes.js';
+import { getFriends } from './friends.js';
 import { getActiveFamilyId } from './requestContext.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
@@ -100,6 +101,11 @@ function groupShape(group, members) {
  * every member's read cursor (so receipts can be computed client-side).
  */
 export async function getBootstrap(userId) {
+  // Phase U — friends are user-level and family-independent (unlike every
+  // other bootstrap slice below), so they're fetched once up top and
+  // included in BOTH the family-less early-return and the normal path.
+  const friends = await getFriends(userId);
+
   const familyId = await userFamilyId(userId);
   if (!familyId) {
     return {
@@ -114,6 +120,7 @@ export async function getBootstrap(userId) {
       categories: [],
       keyRolls: [],
       notes: [],
+      friends,
       serverTime: new Date().toISOString(),
     };
   }
@@ -183,7 +190,7 @@ export async function getBootstrap(userId) {
   // dozen rows), so the whole list rides along in bootstrap same as those.
   const notes = await listNotes(userId);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, serverTime: new Date().toISOString() };
 }
 
 /**
@@ -212,6 +219,11 @@ export async function getSyncSince(userId, afterIso) {
   // Phase P — full resend on every sync, same as grocery/tasks/events/albums
   // above (family-scale, simplest-correct beats per-row change tracking).
   const notes = await listNotes(userId);
+  // Phase U — full resend on every sync, same as grocery/tasks/events/albums
+  // above. Unlike everything else on this page, friends are user-level (not
+  // family-scoped) — computed unconditionally, same as keyRolls' familyId
+  // lookup below, so a family-less user's sync still carries them.
+  const friends = await getFriends(userId);
 
   const { rows: groupRows } = await query(
     'SELECT group_id FROM group_members WHERE user_id = $1',
@@ -235,7 +247,7 @@ export async function getSyncSince(userId, afterIso) {
     : { rows: [] };
   const keyRolls = rollRows.map((r) => ({ id: r.id, familyId: r.family_id, wrapped: r.wrapped, createdBy: r.created_by, createdAt: r.created_at.toISOString() }));
 
-  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, categories, notes, serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, categories, notes, friends, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -259,6 +271,7 @@ export async function getSyncSince(userId, afterIso) {
     budget,
     categories,
     notes,
+    friends,
     serverTime,
   };
 }
