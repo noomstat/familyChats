@@ -14,3 +14,5 @@ export { AlbumsScreen } from './AlbumsScreen';
 export { AlbumScreen } from './AlbumScreen';
 export { MemoriesScreen } from './MemoriesScreen';
 export { FinanceScreen } from './FinanceScreen';
+export { FriendsListScreen } from './FriendsListScreen';
+export { AddFriendScreen } from './AddFriendScreen';

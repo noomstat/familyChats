@@ -31,7 +31,15 @@
     },
     "owner": "noomstat",
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow FamilyChats to use your camera to scan a friend's QR code.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ]
     ]
   }
 }

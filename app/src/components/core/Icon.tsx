@@ -70,6 +70,10 @@ import {
   GraduationCap,
   Stethoscope,
   Wrench,
+  UserPlus,
+  QrCode,
+  ScanLine,
+  Clipboard,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -151,6 +155,12 @@ const REGISTRY: Record<string, LucideIcon> = {
   'graduation-cap': GraduationCap,
   stethoscope: Stethoscope,
   wrench: Wrench,
+  // Phase U — Friends tab ("add friend" affordance, QR/scan add-flow). `users`
+  // was already registered above (family-size chat-row badge).
+  'user-plus': UserPlus,
+  'qr-code': QrCode,
+  'scan-line': ScanLine,
+  clipboard: Clipboard,
 };
 
 export type IconName = keyof typeof REGISTRY;

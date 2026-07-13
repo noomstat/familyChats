@@ -1,5 +1,6 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 import type { ChatGroup } from '../store/AppStore';
+import type { Friend } from '../api/client';
 
 export type ChatsStackParamList = {
   ChatList: undefined;
@@ -29,9 +30,21 @@ export type FamilyStackParamList = {
   AddFamily: undefined;
 };
 
+// Phase U — Friends foundation: a friends list + add-by-QR. No chat yet
+// (Phase V) — tapping a friend on the list is currently a no-op placeholder.
+export type FriendsStackParamList = {
+  FriendsList: undefined;
+  AddFriend: undefined;
+};
+
 export type RootTabParamList = {
   Chats: NavigatorScreenParams<ChatsStackParamList>;
   Family: NavigatorScreenParams<FamilyStackParamList>;
+  Friends: NavigatorScreenParams<FriendsStackParamList>;
   Map: undefined;
   You: undefined;
 };
+
+// Re-exported here purely so screens importing navigation prop types don't
+// also need a separate import from api/client for this one type.
+export type { Friend };

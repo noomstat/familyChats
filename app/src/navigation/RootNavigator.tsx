@@ -2,7 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { getFocusedRouteNameFromRoute, RouteProp } from '@react-navigation/native';
-import { MessageCircle, Map as MapIcon, User, Home } from 'lucide-react-native';
+import { MessageCircle, Map as MapIcon, User, Home, Users } from 'lucide-react-native';
 import { semantic, fontFamily } from '../theme';
 import {
   ChatListScreen,
@@ -20,11 +20,14 @@ import {
   MemoriesScreen,
   FinanceScreen,
   AddFamilyScreen,
+  FriendsListScreen,
+  AddFriendScreen,
 } from '../screens';
-import type { ChatsStackParamList, FamilyStackParamList, RootTabParamList } from './types';
+import type { ChatsStackParamList, FamilyStackParamList, FriendsStackParamList, RootTabParamList } from './types';
 
 const ChatsStack = createNativeStackNavigator<ChatsStackParamList>();
 const FamilyStack = createNativeStackNavigator<FamilyStackParamList>();
+const FriendsStack = createNativeStackNavigator<FriendsStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
 // Thread & NewChat have their own full-bleed headers/back buttons and no
@@ -67,6 +70,18 @@ function FamilyNavigator() {
   );
 }
 
+// Phase U — Friends foundation: list + add-by-QR. Keeps the tab bar visible
+// (unlike Thread/NewChat in the Chats stack) — no per-route tabBarStyle
+// override needed, same as FamilyNavigator's screens.
+function FriendsNavigator() {
+  return (
+    <FriendsStack.Navigator screenOptions={{ headerShown: false }}>
+      <FriendsStack.Screen name="FriendsList" component={FriendsListScreen} />
+      <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} options={{ presentation: 'modal' }} />
+    </FriendsStack.Navigator>
+  );
+}
+
 export function RootNavigator() {
   return (
     <Tab.Navigator
@@ -91,6 +106,11 @@ export function RootNavigator() {
         name="Family"
         component={FamilyNavigator}
         options={{ tabBarLabel: 'Family', tabBarIcon: ({ color, size }) => <Home color={color} size={size} /> }}
+      />
+      <Tab.Screen
+        name="Friends"
+        component={FriendsNavigator}
+        options={{ tabBarLabel: 'Friends', tabBarIcon: ({ color, size }) => <Users color={color} size={size} /> }}
       />
       <Tab.Screen
         name="Map"
