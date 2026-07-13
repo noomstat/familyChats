@@ -9,6 +9,7 @@ import { listGrocery, listTasks } from './lists.js';
 import { listEvents } from './events.js';
 import { listAlbums } from './albums.js';
 import { getFinance } from './finance.js';
+import { listKeyRolls } from './family.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -105,6 +106,7 @@ export async function getBootstrap(userId) {
       expenses: [],
       transfers: [],
       budget: null,
+      keyRolls: [],
       serverTime: new Date().toISOString(),
     };
   }
@@ -160,8 +162,14 @@ export async function getBootstrap(userId) {
   // riding along in bootstrap like the other (family-scale) lists.
   const albums = await listAlbums(userId);
   const { expenses, transfers, budget } = await getFinance(userId);
+  // Phase N — every key roll the family has ever produced, oldest first, so
+  // a cold client can fixpoint-replay the whole rotation chain from its
+  // anchor (invite) key. Order doesn't matter to the replay itself, but
+  // shipping it chronologically means the common case (no gaps) resolves in
+  // one pass.
+  const keyRolls = await listKeyRolls(familyId);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, keyRolls, serverTime: new Date().toISOString() };
 }
 
 /**
@@ -190,7 +198,24 @@ export async function getSyncSince(userId, afterIso) {
     [userId],
   );
   const groupIds = groupRows.map((r) => r.group_id);
-  if (!groupIds.length) return { messages: [], reads: [], grocery, tasks, events, albums, expenses, transfers, budget, serverTime };
+
+  // Phase N — key rolls created since `after`, so a member who was OFFLINE
+  // through a rotation (and thus missed the live `keyroll` WS broadcast) still
+  // catches up on reconnect via this delta path, instead of showing the
+  // post-rotation messages permanently locked until a full re-bootstrap. These
+  // are family-scoped (NOT group-scoped like messages/reads), so they're
+  // computed BEFORE the no-groups early-return below — a member is never in a
+  // group-less state that should silently drop key rolls.
+  const familyId = await userFamilyId(userId);
+  const { rows: rollRows } = familyId
+    ? await query(
+        'SELECT id, family_id, wrapped, created_by, created_at FROM family_key_rolls WHERE family_id = $1 AND created_at > $2 ORDER BY created_at ASC',
+        [familyId, after],
+      )
+    : { rows: [] };
+  const keyRolls = rollRows.map((r) => ({ id: r.id, familyId: r.family_id, wrapped: r.wrapped, createdBy: r.created_by, createdAt: r.created_at.toISOString() }));
+
+  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -204,6 +229,7 @@ export async function getSyncSince(userId, afterIso) {
   return {
     messages: msgRows.map(mapMessage),
     reads: readRows.map((r) => ({ groupId: r.group_id, userId: r.user_id, lastReadTs: r.last_read_ts.toISOString() })),
+    keyRolls,
     grocery,
     tasks,
     events,

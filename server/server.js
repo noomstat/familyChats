@@ -7,7 +7,7 @@ import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
 import { pool } from './src/db.js';
 import { register, login, logout, requireAuth } from './src/auth.js';
-import { createFamily, joinFamily, getFamilyForUser, regenerateCode } from './src/family.js';
+import { createFamily, joinFamily, getFamilyForUser, regenerateCode, addKeyRoll } from './src/family.js';
 import { attachWebSocketServer } from './src/ws.js';
 import {
   getBootstrap,
@@ -145,6 +145,19 @@ app.get('/families/members', requireAuth, async (req, res, next) => {
   try {
     const found = await getFamilyForUser(req.user.id);
     res.json({ members: found?.members ?? [] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Phase N — manual key rotation. Any member can call this (see addKeyRoll's
+// comment — the app restricts the button to owners, but there's no
+// server-side reason to enforce it); the server only ever sees opaque
+// ciphertext, same as a message body.
+app.post('/families/:familyId/key-rolls', requireAuth, async (req, res, next) => {
+  try {
+    const roll = await addKeyRoll({ familyId: req.params.familyId, userId: req.user.id, wrapped: req.body?.wrapped });
+    res.status(201).json({ roll });
   } catch (err) {
     next(err);
   }
