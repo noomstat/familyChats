@@ -43,7 +43,6 @@ import {
   addPhoto,
   removePhoto,
 } from './src/albums.js';
-import { summarizeGroup, searchFamily, scanReceipt } from './src/ai.js';
 import { getTimeline } from './src/timeline.js';
 import { addExpense, removeExpense, addTransfer, setBudget, remind } from './src/finance.js';
 
@@ -582,10 +581,8 @@ app.post('/finance/remind', requireAuth, async (req, res, next) => {
   }
 });
 
-// Multipart: field `file` (the receipt photo). The photo is kept — and
-// receiptPath returned — even when the AI scan itself fails/503s (no
-// ANTHROPIC_API_KEY): manual entry with the photo attached is the fallback,
-// same graceful-degrade UX as Phase G's chat summary/search.
+// Multipart: field `file` (the receipt photo). Just stores the photo and
+// returns its path — manual entry with the photo attached.
 app.post('/finance/scan-receipt', requireAuth, upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'file is required' });
@@ -594,34 +591,9 @@ app.post('/finance/scan-receipt', requireAuth, upload.single('file'), async (req
       return res.status(400).json({ error: `expected an image file, got ${req.file.mimetype}` });
     }
     const receiptPath = `/uploads/${req.file.filename}`;
-    let scan = null;
-    let scanError;
-    try {
-      scan = await scanReceipt(receiptPath);
-    } catch (err) {
-      scanError = err.message || 'AI scan failed';
-    }
-    res.json(scanError ? { receiptPath, scan, scanError } : { receiptPath, scan });
+    res.json({ receiptPath });
   } catch (err) {
     if (req.file) await unlink(req.file.path).catch(() => {});
-    next(err);
-  }
-});
-
-// ── AI: Chat Summary + AI Search ──────────────────────────────
-
-app.post('/groups/:id/summary', requireAuth, async (req, res, next) => {
-  try {
-    res.json(await summarizeGroup(req.params.id, req.user.id));
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post('/search', requireAuth, async (req, res, next) => {
-  try {
-    res.json(await searchFamily(req.body?.query, req.user.id));
-  } catch (err) {
     next(err);
   }
 });
