@@ -7,7 +7,7 @@ import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
 import { pool } from './src/db.js';
 import { register, login, logout, requireAuth } from './src/auth.js';
-import { createFamily, joinFamily, getFamilyForUser, regenerateCode, setE2EE } from './src/family.js';
+import { createFamily, joinFamily, getFamilyForUser, regenerateCode } from './src/family.js';
 import { attachWebSocketServer } from './src/ws.js';
 import {
   getBootstrap,
@@ -135,19 +135,6 @@ app.post('/families/regenerate-code', requireAuth, async (req, res, next) => {
     const found = await getFamilyForUser(req.user.id);
     if (!found) return res.status(404).json({ error: 'not in a family' });
     const updated = await regenerateCode({ familyId: found.family.id, userId: req.user.id });
-    res.json(updated);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Owner-only, one-way: turns on end-to-end encryption for the caller's
-// family. See src/family.js's setE2EE for why there's no "disable".
-app.post('/families/e2ee', requireAuth, async (req, res, next) => {
-  try {
-    const found = await getFamilyForUser(req.user.id);
-    if (!found) return res.status(404).json({ error: 'not in a family' });
-    const updated = await setE2EE({ familyId: found.family.id, userId: req.user.id, enabled: req.body?.enabled });
     res.json(updated);
   } catch (err) {
     next(err);

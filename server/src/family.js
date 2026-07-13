@@ -65,7 +65,7 @@ export async function createFamily({ name, userId }) {
     if (!inviteCode) throw new Error('could not allocate a unique invite code');
 
     await client.query(
-      'INSERT INTO families (id, name, invite_code, created_by) VALUES ($1, $2, $3, $4)',
+      'INSERT INTO families (id, name, invite_code, created_by, e2ee) VALUES ($1, $2, $3, $4, true)',
       [familyId, name.trim(), inviteCode, userId],
     );
     await client.query(
@@ -132,31 +132,6 @@ export async function getFamilyForUser(userId) {
     family: { id: row.id, name: row.name, inviteCode: row.invite_code, role: row.role, e2ee: row.e2ee },
     members,
   };
-}
-
-/**
- * Turns on end-to-end encryption for a family. Owner-only, one-way (no
- * disable in v1 — flipping it back off would leave a mixed plaintext/
- * ciphertext history with no clean way to explain which messages are
- * readable, so we simply don't offer it). The server never sees the key:
- * this just flips the enforcement flag that createMessage() checks.
- */
-export async function setE2EE({ familyId, userId, enabled }) {
-  if (enabled !== true) throw badRequest('only enabling e2ee is supported');
-  const { rows } = await query(
-    'SELECT role FROM family_members WHERE family_id = $1 AND user_id = $2',
-    [familyId, userId],
-  );
-  if (!rows[0]) throw notFound('not a member of this family');
-  if (rows[0].role !== 'owner') throw forbidden('only the family owner can enable encryption');
-
-  await query('UPDATE families SET e2ee = true WHERE id = $1', [familyId]);
-  const found = await getFamilyForUser(userId);
-  // Every member's client needs to know the flag flipped (so it starts
-  // rejecting/expecting envelopes and shows the locked-state UI) — same
-  // broadcast pattern as group upserts in chat.js.
-  await broadcastToFamily(familyId, { type: 'family', action: 'upsert', family: found.family });
-  return found;
 }
 
 /** Rotate a family's invite code. Owner-only. */
