@@ -33,6 +33,7 @@ import {
   removeTask,
 } from './src/lists.js';
 import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js';
+import { listNotes, addNote, updateNote, removeNote } from './src/notes.js';
 import { upload, UPLOADS_DIR } from './src/uploads.js';
 import {
   listAlbums,
@@ -443,6 +444,46 @@ app.patch('/events/:id', requireAuth, async (req, res, next) => {
 app.delete('/events/:id', requireAuth, async (req, res, next) => {
   try {
     const result = await removeEvent({ id: req.params.id, userId: req.user.id });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Shared Notes (Phase P — E2EE) ─────────────────────────────
+
+app.get('/notes', requireAuth, async (req, res, next) => {
+  try {
+    const notes = await listNotes(req.user.id);
+    res.json({ notes });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/notes', requireAuth, async (req, res, next) => {
+  try {
+    const { id, cipher } = req.body ?? {};
+    const note = await addNote({ id, cipher, userId: req.user.id });
+    res.status(201).json({ note });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/notes/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { cipher } = req.body ?? {};
+    const note = await updateNote({ id: req.params.id, cipher, userId: req.user.id });
+    res.json({ note });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/notes/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeNote({ id: req.params.id, userId: req.user.id });
     res.json(result);
   } catch (err) {
     next(err);

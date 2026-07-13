@@ -10,6 +10,7 @@ import { listEvents } from './events.js';
 import { listAlbums } from './albums.js';
 import { getFinance } from './finance.js';
 import { listKeyRolls } from './family.js';
+import { listNotes } from './notes.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -107,6 +108,7 @@ export async function getBootstrap(userId) {
       transfers: [],
       budget: null,
       keyRolls: [],
+      notes: [],
       serverTime: new Date().toISOString(),
     };
   }
@@ -168,8 +170,11 @@ export async function getBootstrap(userId) {
   // shipping it chronologically means the common case (no gaps) resolves in
   // one pass.
   const keyRolls = await listKeyRolls(familyId);
+  // Phase P — family-scale like grocery/tasks/events (a handful to a few
+  // dozen rows), so the whole list rides along in bootstrap same as those.
+  const notes = await listNotes(userId);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, keyRolls, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, keyRolls, notes, serverTime: new Date().toISOString() };
 }
 
 /**
@@ -192,6 +197,9 @@ export async function getSyncSince(userId, afterIso) {
   const events = await listEvents(userId);
   const albums = await listAlbums(userId);
   const { expenses, transfers, budget } = await getFinance(userId);
+  // Phase P — full resend on every sync, same as grocery/tasks/events/albums
+  // above (family-scale, simplest-correct beats per-row change tracking).
+  const notes = await listNotes(userId);
 
   const { rows: groupRows } = await query(
     'SELECT group_id FROM group_members WHERE user_id = $1',
@@ -215,7 +223,7 @@ export async function getSyncSince(userId, afterIso) {
     : { rows: [] };
   const keyRolls = rollRows.map((r) => ({ id: r.id, familyId: r.family_id, wrapped: r.wrapped, createdBy: r.created_by, createdAt: r.created_at.toISOString() }));
 
-  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, notes, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -237,6 +245,7 @@ export async function getSyncSince(userId, afterIso) {
     expenses,
     transfers,
     budget,
+    notes,
     serverTime,
   };
 }
