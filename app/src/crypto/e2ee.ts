@@ -86,6 +86,8 @@ async function getRandomBytes(n: number): Promise<Uint8Array> {
 export interface E2eePayload {
   text?: string;
   loc?: { label: string; meta?: string; live?: boolean };
+  /** Phase P — a shared family note's title+body, encrypted together into one envelope. */
+  note?: { title: string; body: string };
 }
 
 /** True if `body` looks like an E2EE envelope (any version) — cheap prefix check. */

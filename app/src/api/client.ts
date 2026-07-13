@@ -177,6 +177,8 @@ export interface BootstrapResponse {
   budget: ServerBudget | null;
   /** Phase N — every key roll this family has produced, oldest first. A cold client fixpoint-replays these from its anchor key to rebuild the full ring (see AppStore.tsx's key-load effect). */
   keyRolls: KeyRoll[];
+  /** Phase P — E2EE shared notes, full current list (family-scale, like grocery/tasks/events). */
+  notes: ServerNote[];
   serverTime: string;
 }
 
@@ -194,6 +196,8 @@ export interface SyncResponse {
   expenses: ServerExpense[];
   transfers: ServerTransfer[];
   budget: ServerBudget | null;
+  /** Full current list, like grocery/tasks/events. */
+  notes: ServerNote[];
   serverTime: string;
 }
 
@@ -369,6 +373,40 @@ export function updateEventItem(token: string, id: string, patch: EventPatch) {
 
 export function removeEventItem(token: string, id: string) {
   return api<{ id: string }>(`/events/${id}`, { method: 'DELETE', token });
+}
+
+// ── Shared Notes (Phase P — E2EE) ─────────────────────────────
+//
+// Server-blind: `cipher` is an opaque e2e:1: envelope of `{note:{title,body}}`
+// (see app/src/crypto/e2ee.ts). The server only checks its shape, never its
+// contents — encrypt/decrypt happen entirely client-side (see AppStore.tsx's
+// fromServerNote).
+
+export interface ServerNote {
+  id: string;
+  familyId: string;
+  cipher: string;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  updatedAt: string;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
+export function getNotes(token: string) {
+  return api<{ notes: ServerNote[] }>('/notes', { token });
+}
+
+export function addNote(token: string, input: { id: string; cipher: string }) {
+  return api<{ note: ServerNote }>('/notes', { method: 'POST', body: input, token });
+}
+
+export function updateNote(token: string, id: string, cipher: string) {
+  return api<{ note: ServerNote }>(`/notes/${id}`, { method: 'PATCH', body: { cipher }, token });
+}
+
+export function removeNote(token: string, id: string) {
+  return api<{ id: string }>(`/notes/${id}`, { method: 'DELETE', token });
 }
 
 // ── Shared Photo Albums + file uploads ───────────────────────

@@ -44,6 +44,39 @@ export interface LiveShare {
   expiresLabel: string;
 }
 
+// ─────────────────────────────────────────────────────────── Notes
+//
+// A shared family note (Phase P — E2EE). Server-backed (see ServerNote in
+// api/client.ts) — mirrors Message's cipher/locked pattern: `title`/`body`
+// are the decrypted view (present once we hold the family key and the
+// envelope checks out), `cipher` is the raw e2e:1: envelope (kept around so
+// a later REDECRYPT pass can retry once a key loads), and `locked` means we
+// tried to decrypt and failed (no key yet, wrong key, or tamper).
+
+export interface Note {
+  id: string;
+  familyId: string;
+  title?: string;
+  body?: string;
+  /** Phase P — set whenever the wire cipher was an E2EE envelope, regardless
+   * of whether it decrypted successfully. This is the ONLY form of an
+   * encrypted note the persist layer is allowed to write to disk — see
+   * AppStore.tsx's persist effect, which strips `title`/`body` from any note
+   * holding a `cipher` before it ever reaches AsyncStorage/localStorage. Also
+   * what the REDECRYPT reducer action re-maps through decryptPayloadWithKeys
+   * once a family key becomes available. */
+  cipher: string;
+  /** True when this note's cipher is an E2EE envelope we couldn't decrypt
+   * (no family key yet, or the wrong one). `title`/`body` are left undefined
+   * — the UI renders a locked card instead of the raw ciphertext. */
+  locked?: boolean;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  updatedAt: string;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
 /** Clock label (HH:MM) for a timestamp; weekday if not today (real wall clock). */
 export function timeLabel(ts: number): string {
   const d = new Date(ts);
