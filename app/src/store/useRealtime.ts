@@ -5,7 +5,7 @@
 import { useEffect, useRef } from 'react';
 import { AppState as RNAppState, AppStateStatus } from 'react-native';
 import { getBootstrap, getSync, getWsUrl } from '../api/client';
-import { applyIncomingKeyRoll, applyIncomingKeyRolls, fromServerMessage, useLastSync, useSession, useStoreDispatch } from './AppStore';
+import { applyIncomingKeyRoll, applyIncomingKeyRolls, fromServerMessage, fromServerNote, useLastSync, useSession, useStoreDispatch } from './AppStore';
 
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
@@ -47,6 +47,10 @@ export function useRealtime(): void {
           dispatch({ type: 'GROCERY_SET', grocery: data.grocery });
           dispatch({ type: 'TASK_SET', tasks: data.tasks });
           dispatch({ type: 'EVENT_SET', events: data.events });
+          // Phase P — notes go through fromServerNote (not a bare passthrough
+          // like grocery/tasks/events) since the ciphertext needs decrypting
+          // against whatever key ring we're currently holding.
+          dispatch({ type: 'NOTE_SET', notes: data.notes.map(fromServerNote) });
           dispatch({ type: 'ALBUM_SET', albums: data.albums });
           dispatch({ type: 'FIN_SET', expenses: data.expenses, transfers: data.transfers, budget: data.budget });
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
@@ -126,6 +130,13 @@ export function useRealtime(): void {
           case 'event':
             if (data.action === 'upsert') dispatch({ type: 'EVENT_UPSERT', event: data.event });
             else if (data.action === 'remove') dispatch({ type: 'EVENT_REMOVE', id: data.id });
+            break;
+          case 'note':
+            // Phase P — 'upsert' carries the raw ServerNote (ciphertext); map
+            // it through fromServerNote same as bootstrap/sync so it decrypts
+            // (or renders locked) against whatever key ring we hold right now.
+            if (data.action === 'upsert') dispatch({ type: 'NOTE_UPSERT', note: fromServerNote(data.note) });
+            else if (data.action === 'remove') dispatch({ type: 'NOTE_REMOVE', id: data.ids?.[0] });
             break;
           case 'album':
             if (data.action === 'upsert') dispatch({ type: 'ALBUM_UPSERT', album: data.album });

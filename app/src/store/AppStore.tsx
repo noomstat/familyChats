@@ -6,6 +6,7 @@ import {
   FinanceSummary,
   LiveShare,
   Message,
+  Note,
   categoryMeta,
   monthKey,
   summarizeFinance,
@@ -28,6 +29,7 @@ import {
   ServerGroup,
   ServerGroceryItem,
   ServerMessage,
+  ServerNote,
   ServerPhoto,
   ServerTask,
   ServerTransfer,
@@ -40,6 +42,7 @@ import {
   addExpense as apiAddExpense,
   addGroupMember,
   addGroceryItem,
+  addNote as apiAddNote,
   addTaskItem,
   addTransfer as apiAddTransfer,
   clearCheckedGrocery as apiClearCheckedGrocery,
@@ -61,6 +64,7 @@ import {
   removeExpense as apiRemoveExpense,
   removeGroupMember,
   removeGroceryItem,
+  removeNote as apiRemoveNote,
   removePhotoItem,
   removeTaskItem,
   renameAlbumItem,
@@ -68,6 +72,7 @@ import {
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
+  updateNote as apiUpdateNote,
   updateTaskItem,
   uploadPhoto,
   uploadReceipt as apiUploadReceipt,
@@ -137,6 +142,8 @@ export interface AppState {
   tasks: ServerTask[];
   /** Server-backed shared calendar events, unsorted — see useEvents() for display order. */
   events: ServerEvent[];
+  /** Phase P — E2EE shared family notes, unsorted — see useNotes() for display order. */
+  notes: Note[];
   /** Server-backed shared photo albums (metadata + photoCount/coverPath), unsorted — see useAlbums(). */
   albums: ServerAlbum[];
   /** Photos per album, ascending by ts — loaded lazily via loadPhotos(); an
@@ -176,6 +183,7 @@ const seedState: AppState = {
   grocery: [],
   tasks: [],
   events: [],
+  notes: [],
   albums: [],
   photosByAlbum: {},
   hydrated: false,
@@ -289,6 +297,31 @@ function toChatGroup(g: ServerGroup): ChatGroup {
   return { id: g.id, familyId: g.familyId, name: g.name, members: g.members };
 }
 
+/**
+ * Phase P — mirrors fromServerMessage: try every key in the current ring
+ * (Phase N rotation means a note could be encrypted under any of them, not
+ * just the newest) and unpack `payload.note` on success. `cipher` is kept
+ * either way so a later REDECRYPT pass or a cold hydrate-from-storage can
+ * still retry once a key loads.
+ */
+export function fromServerNote(sn: ServerNote): Note {
+  const base = {
+    id: sn.id,
+    familyId: sn.familyId,
+    cipher: sn.cipher,
+    createdBy: sn.createdBy,
+    updatedAt: sn.updatedAt,
+    ts: sn.ts,
+  };
+
+  const keys = familyKeyRing?.keys ?? [];
+  const decrypted = keys.length ? decryptPayloadWithKeys(keys, sn.cipher) : null;
+  if (decrypted?.note) {
+    return { ...base, title: decrypted.note.title, body: decrypted.note.body };
+  }
+  return { ...base, locked: true };
+}
+
 // ── Actions ──────────────────────────────────────────────────
 
 type Action =
@@ -319,6 +352,9 @@ type Action =
   | { type: 'EVENT_SET'; events: ServerEvent[] }
   | { type: 'EVENT_UPSERT'; event: ServerEvent }
   | { type: 'EVENT_REMOVE'; id: string }
+  | { type: 'NOTE_SET'; notes: Note[] }
+  | { type: 'NOTE_UPSERT'; note: Note }
+  | { type: 'NOTE_REMOVE'; id: string }
   | { type: 'ALBUM_SET'; albums: ServerAlbum[] }
   | { type: 'ALBUM_UPSERT'; album: ServerAlbum }
   | { type: 'ALBUM_REMOVE'; id: string }
@@ -390,6 +426,7 @@ function reducer(state: AppState, action: Action): AppState {
         grocery: action.payload.grocery,
         tasks: action.payload.tasks,
         events: action.payload.events,
+        notes: action.payload.notes.map(fromServerNote),
         albums: action.payload.albums,
         photosByAlbum,
         finExpenses: action.payload.expenses,
@@ -450,8 +487,11 @@ function reducer(state: AppState, action: Action): AppState {
     // Phase N — `keys` is the whole ring, not one key, so a message that
     // arrived encrypted under a just-rotated-in key (before its roll was
     // applied) unlocks here too, not just messages under the anchor key.
+    // Phase P — broadened to also walk `notes` (same cipher/locked shape),
+    // so a note hydrated from storage as ciphertext-only, or one that
+    // arrived while offline, unlocks the moment the ring is available.
     case 'REDECRYPT': {
-      let changed = false;
+      let messagesChanged = false;
       const messages: Record<string, Message[]> = {};
       for (const [groupId, msgs] of Object.entries(state.messages)) {
         let groupChanged = false;
@@ -469,9 +509,24 @@ function reducer(state: AppState, action: Action): AppState {
           };
         });
         messages[groupId] = groupChanged ? next : msgs;
-        if (groupChanged) changed = true;
+        if (groupChanged) messagesChanged = true;
       }
-      return changed ? { ...state, messages } : state;
+
+      let notesChanged = false;
+      const notes = state.notes.map((n) => {
+        if (!n.locked || !n.cipher) return n;
+        const decrypted = decryptPayloadWithKeys(action.keys, n.cipher);
+        if (!decrypted?.note) return n;
+        notesChanged = true;
+        return { ...n, locked: undefined, title: decrypted.note.title, body: decrypted.note.body };
+      });
+
+      if (!messagesChanged && !notesChanged) return state;
+      return {
+        ...state,
+        messages: messagesChanged ? messages : state.messages,
+        notes: notesChanged ? notes : state.notes,
+      };
     }
 
     case 'MERGE_READ': {
@@ -587,6 +642,20 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'EVENT_REMOVE':
       return { ...state, events: state.events.filter((e) => e.id !== action.id) };
+
+    case 'NOTE_SET':
+      return { ...state, notes: action.notes };
+
+    case 'NOTE_UPSERT': {
+      const idx = state.notes.findIndex((n) => n.id === action.note.id);
+      const notes = idx >= 0
+        ? state.notes.map((n, i) => (i === idx ? action.note : n))
+        : [...state.notes, action.note];
+      return { ...state, notes };
+    }
+
+    case 'NOTE_REMOVE':
+      return { ...state, notes: state.notes.filter((n) => n.id !== action.id) };
 
     case 'ALBUM_SET': {
       const albumIds = new Set(action.albums.map((a) => a.id));
@@ -765,6 +834,11 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   // the next time familyKeyRing is populated (see the key-load effect below)
   // — that's what keeps offline reads working despite storage holding only
   // ciphertext.
+  // Phase P — notes get the exact same treatment as messages above: any note
+  // holding a `cipher` is stripped down to ciphertext + metadata only before
+  // it's serialized, never persisting decrypted title/body. REDECRYPT re-maps
+  // these back the next time familyKeyRing is populated (see the key-load
+  // effect below).
   useEffect(() => {
     if (!state.hydrated) return;
     const { hydrated: _hydrated, session: _session, family: _family, sessionReady: _sessionReady, hasFamilyKey: _hasFamilyKey, ...persisted } = state;
@@ -776,7 +850,12 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
           : m,
       );
     }
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ ...persisted, messages })).catch(() => {});
+    const notes: Note[] = persisted.notes.map((n) =>
+      n.cipher
+        ? { id: n.id, familyId: n.familyId, cipher: n.cipher, locked: true, createdBy: n.createdBy, updatedAt: n.updatedAt, ts: n.ts }
+        : n,
+    );
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ ...persisted, messages, notes })).catch(() => {});
   }, [state]);
 
   // Load the session token once on mount and, if present, hydrate session+family
@@ -1249,6 +1328,61 @@ export function useActions() {
         if (token) removeEventItem(token, id).catch((err) => console.warn('[store] removeEvent failed', err));
       },
 
+      // ── Shared Notes (Phase P — E2EE) ─────────────────────────
+      //
+      // Notes are ALWAYS encrypted (families are born e2ee — see FamilyState
+      // — there's no plaintext fallback like messages have pre-Phase-K). The
+      // family.e2ee + activeKeyFor guard mirrors sendMessage/sendLocation's
+      // encrypted path: without a key this device can't produce a valid
+      // envelope, so writes are simply refused (screens should already be
+      // gating the UI on useE2EE().hasKey — see NotesScreen).
+      //
+      // Unlike sendMessage (which relies on the WS `message` broadcast to
+      // eventually deliver the real ciphertext back to the sender), add/
+      // updateNote re-dispatch straight off the POST/PATCH response. That's
+      // not just an optimization: the optimistic entry's `cipher` is a ''
+      // placeholder (Note.cipher is non-optional — every note is encrypted,
+      // there's no plaintext-note shape to fall back to), so it MUST be
+      // replaced with the real envelope before this note is safe to persist
+      // or REDECRYPT — same "fill in the real thing from the response" need
+      // as sendVoice's follow-up MERGE_MESSAGES after its upload resolves.
+
+      addNote: (title: string, body: string) => {
+        const userId = state.session?.userId;
+        const familyId = state.family?.id;
+        if (!userId || !familyId || !token) return;
+        const key = state.family?.e2ee ? activeKeyFor(familyId) : null;
+        if (!key) return; // no family key on this device yet — can't encrypt
+        const id = uid();
+        const now = new Date().toISOString();
+        const note: Note = { id, familyId, title, body, cipher: '', createdBy: userId, updatedAt: now, ts: now };
+        dispatch({ type: 'NOTE_UPSERT', note });
+        encryptPayload(key, { note: { title, body } })
+          .then((cipher) => apiAddNote(token, { id, cipher }))
+          .then(({ note: sn }) => dispatch({ type: 'NOTE_UPSERT', note: fromServerNote(sn) }))
+          .catch((err) => console.warn('[store] addNote failed', err));
+      },
+
+      updateNote: (id: string, title: string, body: string) => {
+        const familyId = state.family?.id;
+        if (!familyId || !token) return;
+        const key = state.family?.e2ee ? activeKeyFor(familyId) : null;
+        if (!key) return;
+        const current = state.notes.find((n) => n.id === id);
+        if (current) {
+          dispatch({ type: 'NOTE_UPSERT', note: { ...current, title, body, updatedAt: new Date().toISOString() } });
+        }
+        encryptPayload(key, { note: { title, body } })
+          .then((cipher) => apiUpdateNote(token, id, cipher))
+          .then(({ note: sn }) => dispatch({ type: 'NOTE_UPSERT', note: fromServerNote(sn) }))
+          .catch((err) => console.warn('[store] updateNote failed', err));
+      },
+
+      removeNote: (id: string) => {
+        dispatch({ type: 'NOTE_REMOVE', id });
+        if (token) apiRemoveNote(token, id).catch((err) => console.warn('[store] removeNote failed', err));
+      },
+
       // ── Shared Photo Albums ──────────────────────────────────
 
       /** Optimistically creates an album and returns its (client-generated) id. */
@@ -1440,7 +1574,7 @@ export function useActions() {
         await keyStorage.setRing(familyId, keys);
       },
     }),
-    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events, state.albums],
+    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events, state.notes, state.albums],
   );
 }
 
@@ -1623,6 +1757,12 @@ export function useTasks(): ServerTask[] {
 export function useEvents(): ServerEvent[] {
   const { state } = useCtx();
   return useMemo(() => [...state.events].sort((a, b) => Date.parse(a.startTs) - Date.parse(b.startTs)), [state.events]);
+}
+
+/** The family's shared notes, most-recently-updated first. */
+export function useNotes(): Note[] {
+  const { state } = useCtx();
+  return useMemo(() => [...state.notes].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)), [state.notes]);
 }
 
 /** The family's photo albums (with photoCount/coverPath), sorted by creation time ascending. */

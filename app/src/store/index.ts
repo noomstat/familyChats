@@ -21,6 +21,7 @@ export {
   useGrocery,
   useTasks,
   useEvents,
+  useNotes,
   useAlbums,
   useAlbumPhotos,
 } from './AppStore';

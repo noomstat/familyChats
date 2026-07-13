@@ -5,7 +5,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, radius } from '../theme';
 import { Icon, Badge, Card } from '../components/core';
 import { PinMark } from '../components/brand/PinMark';
-import { thb, useAlbums, useEvents, useFamily, useFinance, useGrocery, useTasks } from '../store';
+import { thb, useAlbums, useEvents, useFamily, useFinance, useGrocery, useNotes, useTasks } from '../store';
 import type { FamilyStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'FamilyHub'>;
@@ -28,6 +28,7 @@ export function FamilyHubScreen({ navigation }: Props) {
   const tasks = useTasks();
   const events = useEvents();
   const albums = useAlbums();
+  const notes = useNotes();
   const finance = useFinance();
   const unchecked = grocery.filter((g) => !g.checkedBy).length;
   const open = tasks.filter((t) => !t.done).length;
@@ -73,6 +74,15 @@ export function FamilyHubScreen({ navigation }: Props) {
       tint: colors.amber100,
       tintFg: colors.amber500,
       onPress: () => navigation.navigate('Albums'),
+    },
+    {
+      key: 'notes',
+      icon: 'sticky-note',
+      label: 'Notes',
+      subtitle: `${notes.length} ${notes.length === 1 ? 'note' : 'notes'}`,
+      tint: colors.sky100,
+      tintFg: colors.sky600,
+      onPress: () => navigation.navigate('Notes'),
     },
     {
       key: 'memories',

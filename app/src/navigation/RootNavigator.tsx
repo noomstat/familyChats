@@ -14,6 +14,7 @@ import {
   CalendarScreen,
   GroceryScreen,
   TasksScreen,
+  NotesScreen,
   AlbumsScreen,
   AlbumScreen,
   MemoriesScreen,
@@ -55,6 +56,7 @@ function FamilyNavigator() {
       <FamilyStack.Screen name="Calendar" component={CalendarScreen} />
       <FamilyStack.Screen name="Grocery" component={GroceryScreen} />
       <FamilyStack.Screen name="Tasks" component={TasksScreen} />
+      <FamilyStack.Screen name="Notes" component={NotesScreen} />
       <FamilyStack.Screen name="Albums" component={AlbumsScreen} />
       <FamilyStack.Screen name="Album" component={AlbumScreen} />
       <FamilyStack.Screen name="Memories" component={MemoriesScreen} />

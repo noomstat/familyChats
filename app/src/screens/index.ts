@@ -9,6 +9,7 @@ export { FamilyHubScreen } from './FamilyHubScreen';
 export { CalendarScreen } from './CalendarScreen';
 export { GroceryScreen } from './GroceryScreen';
 export { TasksScreen } from './TasksScreen';
+export { NotesScreen } from './NotesScreen';
 export { AlbumsScreen } from './AlbumsScreen';
 export { AlbumScreen } from './AlbumScreen';
 export { MemoriesScreen } from './MemoriesScreen';

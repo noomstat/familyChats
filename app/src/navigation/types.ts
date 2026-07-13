@@ -15,6 +15,7 @@ export type FamilyStackParamList = {
   Calendar: undefined;
   Grocery: undefined;
   Tasks: undefined;
+  Notes: undefined;
   Albums: undefined;
   // `name` is a render-immediately fallback; the screen prefers the live
   // album from the store (rename/photoCount updates) once available.
