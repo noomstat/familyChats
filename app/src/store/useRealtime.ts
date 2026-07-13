@@ -5,7 +5,17 @@
 import { useEffect, useRef } from 'react';
 import { AppState as RNAppState, AppStateStatus } from 'react-native';
 import { getBootstrap, getSync, getWsUrl } from '../api/client';
-import { applyIncomingKeyRoll, applyIncomingKeyRolls, fromServerMessage, fromServerNote, useLastSync, useSession, useStoreDispatch } from './AppStore';
+import {
+  applyIncomingKeyRoll,
+  applyIncomingKeyRolls,
+  fromServerMessage,
+  fromServerNote,
+  useActiveFamilyId,
+  useGroups,
+  useLastSync,
+  useSession,
+  useStoreDispatch,
+} from './AppStore';
 
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
@@ -17,6 +27,20 @@ export function useRealtime(): void {
 
   const lastSyncRef = useRef(lastSync);
   lastSyncRef.current = lastSync;
+
+  // Phase S — the WS hub is user-scoped: a member of several families gets
+  // EVERY family's broadcasts down the one socket (see server/src/ws.js),
+  // but the store only ever holds the ACTIVE family's slices (replaced
+  // wholesale on bootstrap/switchFamily). These refs let the onmessage
+  // closure (set up once per connect(), long-lived across renders) always
+  // see the CURRENT active family / known group ids without reconnecting.
+  const activeFamilyId = useActiveFamilyId();
+  const activeFamilyIdRef = useRef(activeFamilyId);
+  activeFamilyIdRef.current = activeFamilyId;
+
+  const groups = useGroups();
+  const groupIdsRef = useRef<Set<string>>(new Set());
+  groupIdsRef.current = new Set(Object.keys(groups));
 
   useEffect(() => {
     if (!session) return;
@@ -81,15 +105,35 @@ export function useRealtime(): void {
         } catch {
           return; // malformed frame — ignore
         }
+
+        // Phase S — the WS hub delivers events for EVERY family this user
+        // belongs to (it's a per-user socket, not per-family — see
+        // server/src/ws.js), but the store's flat slices only ever hold the
+        // ACTIVE family's data. `isActiveFamily` drops any upsert whose
+        // familyId isn't the one currently loaded, so a background family's
+        // traffic never leaks into the slices the active-family screens
+        // read. Remove/clear actions are deliberately NOT filtered here —
+        // they're id-based array filters that are a safe no-op if the id
+        // belongs to a family we're not currently holding data for.
+        const isActiveFamily = (familyId: string | null | undefined) => !!familyId && familyId === activeFamilyIdRef.current;
+
         switch (data?.type) {
           case 'message':
-            dispatch({ type: 'MERGE_MESSAGES', messages: [fromServerMessage(data.message)] });
+            // No familyId on the wire — filter by whether this message's
+            // group is one of the active family's KNOWN groups (state.groups
+            // is replaced wholesale on bootstrap/switchFamily, so a group
+            // from a background family is simply absent here).
+            if (data.message && groupIdsRef.current.has(data.message.groupId)) {
+              dispatch({ type: 'MERGE_MESSAGES', messages: [fromServerMessage(data.message)] });
+            }
             break;
           case 'read':
-            dispatch({ type: 'MERGE_READ', groupId: data.groupId, userId: data.userId, ts: Date.parse(data.lastReadTs) });
+            if (groupIdsRef.current.has(data.groupId)) {
+              dispatch({ type: 'MERGE_READ', groupId: data.groupId, userId: data.userId, ts: Date.parse(data.lastReadTs) });
+            }
             break;
           case 'group':
-            dispatch({ type: 'GROUP_UPSERT', group: data.group });
+            if (isActiveFamily(data.group?.familyId)) dispatch({ type: 'GROUP_UPSERT', group: data.group });
             break;
           case 'family':
             // 'upsert' has no current server-side sender (Phase K's e2ee-flip
@@ -98,6 +142,10 @@ export function useRealtime(): void {
             // for future family-attribute broadcasts (e.g. a rename). Merges
             // onto whatever family state we already have rather than
             // dropping `members` to [], since this event doesn't carry it.
+            // FAMILY_PATCH itself is safe to dispatch for ANY family we're
+            // tracking in `families` (not just the active one) — it patches
+            // the matching `families` entry either way and only touches the
+            // active `family` slice if the id matches (see the reducer).
             if (data.action === 'upsert' && data.family) {
               dispatch({ type: 'FAMILY_PATCH', patch: { id: data.family.id, name: data.family.name, inviteCode: data.family.inviteCode, e2ee: data.family.e2ee } });
             }
@@ -115,51 +163,67 @@ export function useRealtime(): void {
             // into our in-memory ring (module-level in AppStore.tsx) and
             // dispatches REDECRYPT itself if that recovers a new key — same
             // "plain function, bare dispatch" shape as fromServerMessage.
+            // applyIncomingKeyRolls itself already no-ops for a roll whose
+            // familyId doesn't match the ring's familyId (== the active
+            // family — see the key-load effect), so no extra filter is
+            // needed here for a background family's rotation.
             else if (data.action === 'keyroll' && data.roll) {
               applyIncomingKeyRoll(data.roll, dispatch);
             }
             break;
           case 'grocery':
-            if (data.action === 'upsert') dispatch({ type: 'GROCERY_UPSERT', item: data.item });
-            else if (data.action === 'remove') dispatch({ type: 'GROCERY_REMOVE', id: data.ids?.[0] });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.item?.familyId)) dispatch({ type: 'GROCERY_UPSERT', item: data.item });
+            } else if (data.action === 'remove') dispatch({ type: 'GROCERY_REMOVE', id: data.ids?.[0] });
             else if (data.action === 'clear-checked') dispatch({ type: 'GROCERY_CLEAR_CHECKED' });
             break;
           case 'task':
-            if (data.action === 'upsert') dispatch({ type: 'TASK_UPSERT', task: data.task });
-            else if (data.action === 'remove') dispatch({ type: 'TASK_REMOVE', id: data.ids?.[0] });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.task?.familyId)) dispatch({ type: 'TASK_UPSERT', task: data.task });
+            } else if (data.action === 'remove') dispatch({ type: 'TASK_REMOVE', id: data.ids?.[0] });
             break;
           case 'event':
-            if (data.action === 'upsert') dispatch({ type: 'EVENT_UPSERT', event: data.event });
-            else if (data.action === 'remove') dispatch({ type: 'EVENT_REMOVE', id: data.id });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.event?.familyId)) dispatch({ type: 'EVENT_UPSERT', event: data.event });
+            } else if (data.action === 'remove') dispatch({ type: 'EVENT_REMOVE', id: data.id });
             break;
           case 'note':
             // Phase P — 'upsert' carries the raw ServerNote (ciphertext); map
             // it through fromServerNote same as bootstrap/sync so it decrypts
             // (or renders locked) against whatever key ring we hold right now.
-            if (data.action === 'upsert') dispatch({ type: 'NOTE_UPSERT', note: fromServerNote(data.note) });
-            else if (data.action === 'remove') dispatch({ type: 'NOTE_REMOVE', id: data.ids?.[0] });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.note?.familyId)) dispatch({ type: 'NOTE_UPSERT', note: fromServerNote(data.note) });
+            } else if (data.action === 'remove') dispatch({ type: 'NOTE_REMOVE', id: data.ids?.[0] });
             break;
           case 'album':
-            if (data.action === 'upsert') dispatch({ type: 'ALBUM_UPSERT', album: data.album });
-            else if (data.action === 'remove') dispatch({ type: 'ALBUM_REMOVE', id: data.id });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.album?.familyId)) dispatch({ type: 'ALBUM_UPSERT', album: data.album });
+            } else if (data.action === 'remove') dispatch({ type: 'ALBUM_REMOVE', id: data.id });
             break;
           case 'photo':
-            if (data.action === 'upsert') dispatch({ type: 'PHOTO_UPSERT', photo: data.photo });
-            else if (data.action === 'remove') dispatch({ type: 'PHOTO_REMOVE', id: data.id, albumId: data.albumId });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.photo?.familyId)) dispatch({ type: 'PHOTO_UPSERT', photo: data.photo });
+            } else if (data.action === 'remove') dispatch({ type: 'PHOTO_REMOVE', id: data.id, albumId: data.albumId });
             break;
           case 'expense':
-            if (data.action === 'upsert') dispatch({ type: 'EXPENSE_UPSERT', expense: data.expense });
-            else if (data.action === 'remove') dispatch({ type: 'EXPENSE_REMOVE', id: data.id });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.expense?.familyId)) dispatch({ type: 'EXPENSE_UPSERT', expense: data.expense });
+            } else if (data.action === 'remove') dispatch({ type: 'EXPENSE_REMOVE', id: data.id });
             break;
           case 'transfer':
-            if (data.action === 'upsert') dispatch({ type: 'TRANSFER_UPSERT', transfer: data.transfer });
+            if (data.action === 'upsert' && isActiveFamily(data.transfer?.familyId)) {
+              dispatch({ type: 'TRANSFER_UPSERT', transfer: data.transfer });
+            }
             break;
           case 'budget':
-            if (data.action === 'upsert') dispatch({ type: 'BUDGET_UPSERT', budget: data.budget });
+            if (data.action === 'upsert' && isActiveFamily(data.budget?.familyId)) {
+              dispatch({ type: 'BUDGET_UPSERT', budget: data.budget });
+            }
             break;
           case 'category':
-            if (data.action === 'upsert') dispatch({ type: 'CATEGORY_UPSERT', category: data.category });
-            else if (data.action === 'remove') dispatch({ type: 'CATEGORY_REMOVE', id: data.id });
+            if (data.action === 'upsert') {
+              if (isActiveFamily(data.category?.familyId)) dispatch({ type: 'CATEGORY_UPSERT', category: data.category });
+            } else if (data.action === 'remove') dispatch({ type: 'CATEGORY_REMOVE', id: data.id });
             break;
           default:
             break; // 'hello' and any future event types we don't handle yet

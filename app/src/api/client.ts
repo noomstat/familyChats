@@ -12,6 +12,18 @@ export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://loca
 
 const WS_PATH = '/ws';
 
+// Phase S — the "active family" for this client, injected as an `X-Family-Id`
+// header on every request. The server validates it against the caller's
+// memberships (falling back to their first family if absent/invalid — see
+// server/src/requestContext.js), so this is purely a UX hint, not a security
+// boundary. Set via setActiveFamilyId() whenever AppStore's activeFamilyId
+// changes (login, /me, switchFamily, createFamily, joinFamily).
+let activeFamilyId: string | null = null;
+
+export function setActiveFamilyId(id: string | null) {
+  activeFamilyId = id;
+}
+
 export interface ApiUser {
   id: string;
   username: string;
@@ -52,6 +64,7 @@ export async function api<T>(path: string, { method = 'GET', body, token }: ApiO
   const headers: Record<string, string> = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (activeFamilyId) headers['X-Family-Id'] = activeFamilyId;
 
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method,
@@ -88,7 +101,7 @@ export function authLogout(token: string) {
 }
 
 export function getMe(token: string) {
-  return api<{ user: ApiUser; family: FamilyInfo | null }>('/me', { token });
+  return api<{ user: ApiUser; families: FamilyInfo[]; activeFamilyId: string | null }>('/me', { token });
 }
 
 // ── Family Space ─────────────────────────────────────────────
@@ -491,9 +504,11 @@ export async function uploadFile<T>(
   }
 
   // No explicit Content-Type — fetch must set the multipart boundary itself.
+  const uploadHeaders: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (activeFamilyId) uploadHeaders['X-Family-Id'] = activeFamilyId;
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
+    headers: uploadHeaders,
     body: form,
   });
 
@@ -580,6 +595,7 @@ export interface ServerTransfer {
 }
 
 export interface ServerBudget {
+  familyId: string;
   /** 'YYYY-MM'. */
   month: string;
   amount: number;

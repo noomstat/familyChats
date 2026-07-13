@@ -74,6 +74,7 @@ import {
   removeTaskItem,
   renameAlbumItem,
   renameGroup as apiRenameGroup,
+  setActiveFamilyId as apiSetActiveFamilyId,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
@@ -83,6 +84,15 @@ import {
   uploadReceipt as apiUploadReceipt,
   uploadVoice,
 } from '../api/client';
+
+// Phase S — persists only the *chosen* active family id (a plain string), not
+// the families/family slices themselves (those stay session-derived, same as
+// session/family always have been — see Persisted below). Read explicitly in
+// the token-check effect, sequenced BEFORE the first getMe() call, so a cold
+// relaunch's X-Family-Id header carries the user's last choice instead of
+// racing the generic AsyncStorage HYDRATE effect (which resolves independently
+// and would otherwise clobber whichever value "won" the race).
+const ACTIVE_FAMILY_KEY = 'familychats:active-family-id';
 
 const STORAGE_KEY = 'familychats:store:v1';
 
@@ -161,7 +171,20 @@ export interface AppState {
   /** The signed-in user, or null when logged out. Not persisted to AsyncStorage —
    * rehydrated each launch from the secure-store token via GET /me. */
   session: Session | null;
-  /** The session user's Family Space, or null until they create/join one. */
+  /** Phase S — every family the session user belongs to. Not persisted (like
+   * session/family) — re-fetched from /me each launch and kept live via
+   * createFamily/joinFamily/switchFamily and the `family` WS members/upsert
+   * events (see FAMILY_PATCH). */
+  families: FamilyState[];
+  /** Phase S — the active family's id (drives the `X-Family-Id` header via
+   * api/client.ts's setActiveFamilyId — see the token-check effect and
+   * switchFamily). Persisted separately (ACTIVE_FAMILY_KEY), not via the
+   * generic AsyncStorage blob — see that constant's comment. */
+  activeFamilyId: string | null;
+  /** The active family (families.find(activeFamilyId)), or null until the
+   * session user has created/joined at least one. Every pre-Phase-S call site
+   * that reads `family` keeps working unchanged — it always means "the
+   * currently active family". */
   family: FamilyState | null;
   /** True once the initial secure-store token check (and /me call) has settled. */
   sessionReady: boolean;
@@ -172,9 +195,10 @@ export interface AppState {
   hasFamilyKey: boolean;
 }
 
-/** The persisted slice — local/offline-read demo + chat cache. Session/family
- * are re-fetched from the server each launch, never cached here. */
-type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'sessionReady' | 'hasFamilyKey'>;
+/** The persisted slice — local/offline-read demo + chat cache. Session/family(s)/
+ * activeFamilyId are re-fetched/re-read from the server/dedicated storage each
+ * launch, never cached in this generic blob. */
+type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'families' | 'activeFamilyId' | 'sessionReady' | 'hasFamilyKey'>;
 
 const seedState: AppState = {
   groups: {},
@@ -196,6 +220,8 @@ const seedState: AppState = {
   photosByAlbum: {},
   hydrated: false,
   session: null,
+  families: [],
+  activeFamilyId: null,
   family: null,
   sessionReady: false,
   hasFamilyKey: false,
@@ -373,7 +399,13 @@ type Action =
   | { type: 'PHOTO_UPSERT'; photo: ServerPhoto }
   | { type: 'PHOTO_REMOVE'; id: string; albumId: string }
   | { type: 'SET_SESSION'; session: Session | null }
-  | { type: 'SET_FAMILY'; family: FamilyState | null }
+  // Phase S — replaces the old single-family SET_FAMILY with three cases for
+  // a multi-family world: FAMILY_CONTEXT (full refresh from /me), FAMILY_ACTIVATE
+  // (upsert one family — createFamily/joinFamily — and make it active), and
+  // SET_ACTIVE_FAMILY (switch among families already known locally).
+  | { type: 'FAMILY_CONTEXT'; families: FamilyState[]; activeFamilyId: string | null }
+  | { type: 'FAMILY_ACTIVATE'; family: FamilyState }
+  | { type: 'SET_ACTIVE_FAMILY'; id: string }
   | { type: 'FAMILY_PATCH'; patch: Partial<FamilyState> & { id: string } }
   | { type: 'SESSION_READY' }
   | { type: 'SET_HAS_KEY'; value: boolean }
@@ -401,6 +433,8 @@ function reducer(state: AppState, action: Action): AppState {
             ...seedState,
             ...action.payload,
             session: state.session,
+            families: state.families,
+            activeFamilyId: state.activeFamilyId,
             family: state.family,
             sessionReady: state.sessionReady,
             hasFamilyKey: state.hasFamilyKey,
@@ -757,15 +791,46 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_SESSION':
       return { ...state, session: action.session };
 
-    case 'SET_FAMILY':
-      return { ...state, family: action.family };
+    case 'FAMILY_CONTEXT': {
+      // Full refresh from GET /me — authoritative for both "every family I'm
+      // in" and "which one is active" (the server already validated the
+      // X-Family-Id header against membership, or fell back to the first
+      // family — see server.js's resolveFamily).
+      const family = action.families.find((f) => f.id === action.activeFamilyId) ?? null;
+      return { ...state, families: action.families, activeFamilyId: action.activeFamilyId, family };
+    }
 
-    case 'FAMILY_PATCH':
-      // Realtime `family` events (e.g. the owner enabling e2ee) carry only
-      // the fields that changed, not the full member list — merge onto
-      // whatever family state we already have rather than clobbering it.
-      if (!state.family || state.family.id !== action.patch.id) return state;
-      return { ...state, family: { ...state.family, ...action.patch } };
+    case 'FAMILY_ACTIVATE': {
+      // createFamily/joinFamily: upsert the affected family into `families`
+      // (a fresh create/create is always new; a re-join of an existing
+      // membership is idempotent) and make it the active one.
+      const idx = state.families.findIndex((f) => f.id === action.family.id);
+      const families = idx >= 0
+        ? state.families.map((f, i) => (i === idx ? action.family : f))
+        : [...state.families, action.family];
+      return { ...state, families, activeFamilyId: action.family.id, family: action.family };
+    }
+
+    case 'SET_ACTIVE_FAMILY': {
+      // switchFamily: only ever targets a family already present in
+      // `families` (the switcher UI only lists known families) — a no-op
+      // guard against an unknown id rather than silently going family-less.
+      const family = state.families.find((f) => f.id === action.id) ?? null;
+      if (!family) return state;
+      return { ...state, activeFamilyId: action.id, family };
+    }
+
+    case 'FAMILY_PATCH': {
+      // Realtime `family` events (member roster changes, e2ee flip, rename)
+      // carry only the fields that changed — merge onto whatever family
+      // state we already have (both the active `family` and its entry
+      // inside `families`) rather than clobbering it.
+      const idx = state.families.findIndex((f) => f.id === action.patch.id);
+      const families = idx >= 0 ? state.families.map((f, i) => (i === idx ? { ...f, ...action.patch } : f)) : state.families;
+      const family = state.family && state.family.id === action.patch.id ? { ...state.family, ...action.patch } : state.family;
+      if (families === state.families && family === state.family) return state;
+      return { ...state, families, family };
+    }
 
     case 'SESSION_READY':
       return state.sessionReady ? state : { ...state, sessionReady: true };
@@ -774,9 +839,9 @@ function reducer(state: AppState, action: Action): AppState {
       return state.hasFamilyKey === action.value ? state : { ...state, hasFamilyKey: action.value };
 
     case 'LOGOUT':
-      // Clears session+family only — local/cached data stays put (the next
+      // Clears session+family(s) only — local/cached data stays put (the next
       // login's bootstrap replaces the chat slices wholesale).
-      return { ...state, session: null, family: null, hasFamilyKey: false };
+      return { ...state, session: null, families: [], activeFamilyId: null, family: null, hasFamilyKey: false };
 
     default:
       return state;
@@ -867,7 +932,16 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   // effect below).
   useEffect(() => {
     if (!state.hydrated) return;
-    const { hydrated: _hydrated, session: _session, family: _family, sessionReady: _sessionReady, hasFamilyKey: _hasFamilyKey, ...persisted } = state;
+    const {
+      hydrated: _hydrated,
+      session: _session,
+      families: _families,
+      activeFamilyId: _activeFamilyId,
+      family: _family,
+      sessionReady: _sessionReady,
+      hasFamilyKey: _hasFamilyKey,
+      ...persisted
+    } = state;
     const messages: Record<string, Message[]> = {};
     for (const [groupId, msgs] of Object.entries(persisted.messages)) {
       messages[groupId] = msgs.map((m) =>
@@ -884,18 +958,33 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ ...persisted, messages, notes })).catch(() => {});
   }, [state]);
 
-  // Load the session token once on mount and, if present, hydrate session+family
-  // from the server. A missing/expired/invalid token is a silent fail → logged out.
+  // Load the session token once on mount and, if present, hydrate session +
+  // families/active-family from the server. A missing/expired/invalid token
+  // is a silent fail → logged out.
+  //
+  // Phase S — reads the last-chosen active family id (its own small
+  // AsyncStorage key, not the generic Persisted blob — see ACTIVE_FAMILY_KEY's
+  // comment) and pushes it into api/client.ts's module-level setter BEFORE
+  // calling getMe(), so a cold relaunch's very first request already carries
+  // the right X-Family-Id header instead of falling back to "first family"
+  // and only correcting itself after this resolves. The server re-validates
+  // membership regardless (see resolveFamily), so a stale/foreign id here is
+  // harmless — worst case it just falls back the same way a missing header would.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const token = await tokenStorage.get();
         if (!token || cancelled) return;
-        const { user, family } = await getMe(token);
+        const persistedActiveFamilyId = await AsyncStorage.getItem(ACTIVE_FAMILY_KEY).catch(() => null);
+        if (persistedActiveFamilyId) apiSetActiveFamilyId(persistedActiveFamilyId);
+        const { user, families, activeFamilyId } = await getMe(token);
         if (cancelled) return;
         dispatch({ type: 'SET_SESSION', session: { token, userId: user.id, username: user.username, name: user.name } });
-        dispatch({ type: 'SET_FAMILY', family: family ? toFamilyState(family) : null });
+        dispatch({ type: 'FAMILY_CONTEXT', families: families.map(toFamilyState), activeFamilyId });
+        apiSetActiveFamilyId(activeFamilyId);
+        if (activeFamilyId) await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, activeFamilyId).catch(() => {});
+        else await AsyncStorage.removeItem(ACTIVE_FAMILY_KEY).catch(() => {});
       } catch {
         if (!cancelled) await tokenStorage.clear().catch(() => {});
       } finally {
@@ -1187,7 +1276,7 @@ export function useActions() {
 
       /** Sets the current month's budget. */
       setBudget: (amount: number) => {
-        const budget: ServerBudget = { month: monthKey(), amount };
+        const budget: ServerBudget = { month: monthKey(), amount, familyId: state.family?.id ?? '' };
         dispatch({ type: 'BUDGET_UPSERT', budget });
         if (token) apiPutBudget(token, { amount }).catch((err) => console.warn('[store] setBudget failed', err));
       },
@@ -1509,16 +1598,19 @@ export function useActions() {
         if (token) removePhotoItem(token, photoId).catch((err) => console.warn('[store] removePhoto failed', err));
       },
 
-      /** Log in an existing user, persist the token, and hydrate family state. */
+      /** Log in an existing user, persist the token, and hydrate families + active family. */
       login: async (username: string, password: string) => {
         const { token: newToken, user } = await authLogin({ username, password });
         await tokenStorage.set(newToken);
         dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name } });
         try {
           const me = await getMe(newToken);
-          dispatch({ type: 'SET_FAMILY', family: me.family ? toFamilyState(me.family) : null });
+          dispatch({ type: 'FAMILY_CONTEXT', families: me.families.map(toFamilyState), activeFamilyId: me.activeFamilyId });
+          apiSetActiveFamilyId(me.activeFamilyId);
+          if (me.activeFamilyId) await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, me.activeFamilyId).catch(() => {});
+          else await AsyncStorage.removeItem(ACTIVE_FAMILY_KEY).catch(() => {});
         } catch {
-          dispatch({ type: 'SET_FAMILY', family: null });
+          dispatch({ type: 'FAMILY_CONTEXT', families: [], activeFamilyId: null });
         }
       },
 
@@ -1528,7 +1620,7 @@ export function useActions() {
         const { token: newToken, user } = await authLogin({ username, password });
         await tokenStorage.set(newToken);
         dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name } });
-        dispatch({ type: 'SET_FAMILY', family: null }); // brand-new account: never in a family yet
+        dispatch({ type: 'FAMILY_CONTEXT', families: [], activeFamilyId: null }); // brand-new account: never in a family yet
       },
 
       /** Log out: best-effort server-side session revoke, then always clear local state. */
@@ -1539,7 +1631,9 @@ export function useActions() {
           // Non-fatal — the token may already be expired/gone server-side.
         }
         await tokenStorage.clear().catch(() => {});
+        await AsyncStorage.removeItem(ACTIVE_FAMILY_KEY).catch(() => {});
         familyKeyRing = null;
+        apiSetActiveFamilyId(null);
         dispatch({ type: 'LOGOUT' });
       },
 
@@ -1551,6 +1645,13 @@ export function useActions() {
        * key alongside the family so the caller can show/share the extended
        * invite immediately — it's never retrievable from the server again.
        */
+      // Phase S — a user may already belong to other families when calling
+      // this (createFamily/joinFamily reachable as "add another family" from
+      // FamilyHub/YouScreen, not just family-less onboarding). Either way the
+      // newly created/joined family becomes the active one immediately —
+      // FAMILY_ACTIVATE both appends/updates it in `families` and switches
+      // `activeFamilyId`/`family` to it, and we push that to api/client.ts's
+      // header setter + persist it, same as switchFamily below.
       createFamily: async (name: string): Promise<{ family: FamilyState; keyB64: string }> => {
         if (!token) throw new Error('not signed in');
         const info = await apiCreateFamily(token, name);
@@ -1560,7 +1661,9 @@ export function useActions() {
         familyKeyRing = { familyId, keys: [keyB64] };
         dispatch({ type: 'SET_HAS_KEY', value: true });
         const family = toFamilyState(info);
-        dispatch({ type: 'SET_FAMILY', family });
+        dispatch({ type: 'FAMILY_ACTIVATE', family });
+        apiSetActiveFamilyId(familyId);
+        await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, familyId).catch(() => {});
         return { family, keyB64 };
       },
 
@@ -1574,7 +1677,34 @@ export function useActions() {
           familyKeyRing = { familyId: family.id, keys: [keyB64] };
           dispatch({ type: 'SET_HAS_KEY', value: true });
         }
-        dispatch({ type: 'SET_FAMILY', family });
+        dispatch({ type: 'FAMILY_ACTIVATE', family });
+        apiSetActiveFamilyId(family.id);
+        await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, family.id).catch(() => {});
+      },
+
+      /**
+       * Phase S — switch the active family among ones the session user
+       * already belongs to (the switcher UI only ever offers `state.families`
+       * entries). Sets the new active family, pushes it to api/client.ts's
+       * header setter, persists the choice, and re-bootstraps to replace the
+       * flat slices (messages/groups/grocery/tasks/events/albums/finance/
+       * categories/notes) with the new family's data. The E2EE keyring
+       * reload is handled by the existing key-load effect (keyed on
+       * state.family?.id, which this changes) — not duplicated here.
+       */
+      switchFamily: async (id: string): Promise<void> => {
+        if (!token) throw new Error('not signed in');
+        if (id === state.activeFamilyId) return;
+        if (!state.families.some((f) => f.id === id)) throw new Error('not a member of that family');
+        dispatch({ type: 'SET_ACTIVE_FAMILY', id });
+        apiSetActiveFamilyId(id);
+        await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, id).catch(() => {});
+        try {
+          const payload = await getBootstrap(token);
+          dispatch({ type: 'BOOTSTRAP', payload });
+        } catch (err) {
+          console.warn('[store] switchFamily bootstrap failed', err);
+        }
       },
 
       /**
@@ -1624,7 +1754,7 @@ export function useActions() {
         await keyStorage.setRing(familyId, keys);
       },
     }),
-    [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events, state.notes, state.albums],
+    [dispatch, token, state.session, state.family, state.families, state.activeFamilyId, state.messages, state.grocery, state.tasks, state.events, state.notes, state.albums],
   );
 }
 
@@ -1757,9 +1887,19 @@ export function useSession(): Session | null {
   return useCtx().state.session;
 }
 
-/** The session user's Family Space, or null until they create/join one. */
+/** The session user's ACTIVE Family Space, or null until they create/join one. */
 export function useFamily(): FamilyState | null {
   return useCtx().state.family;
+}
+
+/** Phase S — every family the session user belongs to (unsorted — server orders by joined_at). Empty until /me resolves. */
+export function useFamilies(): FamilyState[] {
+  return useCtx().state.families;
+}
+
+/** Phase S — the active family's id, or null if the user isn't in any family yet. Mirrors useFamily()?.id but stays non-null-checked against `families` even before that lookup resolves. */
+export function useActiveFamilyId(): string | null {
+  return useCtx().state.activeFamilyId;
 }
 
 /** True once the initial secure-store token check (and /me call) has settled —

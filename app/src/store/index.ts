@@ -17,6 +17,8 @@ export {
   useHydrated,
   useSession,
   useFamily,
+  useFamilies,
+  useActiveFamilyId,
   useSessionReady,
   useE2EE,
   useGrocery,
