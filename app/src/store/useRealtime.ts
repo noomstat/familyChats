@@ -6,10 +6,13 @@ import { useEffect, useRef } from 'react';
 import { AppState as RNAppState, AppStateStatus } from 'react-native';
 import { getBootstrap, getSync, getWsUrl } from '../api/client';
 import {
+  applyFriendGroupsSync,
+  applyIncomingFriendGroupKey,
   applyIncomingKeyRoll,
   applyIncomingKeyRolls,
   fromServerMessage,
   fromServerNote,
+  upsertConversation,
   useActiveFamilyId,
   useGroups,
   useLastSync,
@@ -82,6 +85,12 @@ export function useRealtime(): void {
           // albums above (user-level, not family-scoped, but the same
           // "simplest-correct" full-replace applies).
           dispatch({ type: 'FRIEND_SET', friends: data.friends });
+          // Phase V — same full-resend pattern as `friends` above (also
+          // family-independent). `data.messages`/`data.reads` above already
+          // cover every group the user belongs to regardless of family (see
+          // chat.js's getSyncSince), so this only needs to (re)apply group
+          // metadata + wrapped keys, not messages.
+          applyFriendGroupsSync(data.friendGroups, data.friendGroupKeys, dispatch);
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
         } else {
           const data = await getBootstrap(session.token);
@@ -137,7 +146,26 @@ export function useRealtime(): void {
             }
             break;
           case 'group':
-            if (isActiveFamily(data.group?.familyId)) dispatch({ type: 'GROUP_UPSERT', group: data.group });
+            // Phase V — a friends-kind group is family-independent (no
+            // familyId to gate on — see server/db/014_friend_convos.sql), so
+            // it's ALWAYS applied regardless of the active family; a
+            // family-kind group keeps the existing active-family filter.
+            if (data.group?.kind === 'friends') {
+              upsertConversation(data.group, dispatch);
+            } else if (isActiveFamily(data.group?.familyId)) {
+              upsertConversation(data.group, dispatch);
+            }
+            break;
+          // Phase V — a member (possibly this device, on being added to a
+          // friend group) just received their wrapped copy of that group's
+          // key. Family-independent, same as `friend` below.
+          case 'friendGroupKey':
+            if (data.groupId && data.wrapped && data.wrappedBy) {
+              applyIncomingFriendGroupKey(
+                { groupId: data.groupId, wrapped: data.wrapped, wrappedBy: data.wrappedBy, wrappedByPublicKey: data.wrappedByPublicKey ?? null },
+                dispatch,
+              );
+            }
             break;
           case 'family':
             // 'upsert' has no current server-side sender (Phase K's e2ee-flip

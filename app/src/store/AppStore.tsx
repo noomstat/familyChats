@@ -17,14 +17,15 @@ import {
 import { tokenStorage } from './tokenStorage';
 import { keyStorage } from './keyStorage';
 import { identityKeyStorage } from './identityKeyStorage';
-import { decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput, unwrapKey, wrapKey } from '../crypto/e2ee';
-import { buildFriendCode, generateIdentityKeypair, parseFriendCode } from '../crypto/friends';
+import { decryptPayload, decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput, unwrapKey, wrapKey } from '../crypto/e2ee';
+import { buildFriendCode, deriveSharedKey, generateIdentityKeypair, parseFriendCode } from '../crypto/friends';
 import {
   BootstrapResponse,
   EventPatch,
   FamilyInfo,
   FamilyMember,
   Friend,
+  FriendGroupKey,
   KeyRoll,
   ServerAlbum,
   ServerBudget,
@@ -47,6 +48,7 @@ import {
   addCategory as apiAddCategory,
   addEventItem,
   addExpense as apiAddExpense,
+  addFriendGroupMember as apiAddFriendGroupMember,
   addGroupMember,
   addGroceryItem,
   addNote as apiAddNote,
@@ -56,6 +58,7 @@ import {
   connectByQr as apiConnectByQr,
   createAlbumItem,
   createFamily as apiCreateFamily,
+  createFriendGroup as apiCreateFriendGroup,
   createGroup as apiCreateGroup,
   getAlbumPhotos,
   getBootstrap,
@@ -63,6 +66,8 @@ import {
   getGroupMessages,
   getMe,
   joinFamily as apiJoinFamily,
+  leaveFriendGroup as apiLeaveFriendGroup,
+  openDm as apiOpenDm,
   postKeyRoll,
   postMessage,
   postRead,
@@ -79,6 +84,7 @@ import {
   removePhotoItem,
   removeTaskItem,
   renameAlbumItem,
+  renameFriendGroup as apiRenameFriendGroup,
   renameGroup as apiRenameGroup,
   setActiveFamilyId as apiSetActiveFamilyId,
   toggleGroceryItem,
@@ -136,10 +142,17 @@ function toFamilyState(info: FamilyInfo): FamilyState {
 /** A server-backed chat group (dynamic — created/renamed/joined at runtime). */
 export interface ChatGroup {
   id: string;
-  familyId: string;
+  /** null for a friends-kind group (Phase V) — friend conversations have no family. */
+  familyId: string | null;
+  /** Phase V — 'family' (every group before this phase) or 'friends' (a 1:1 DM or friend group). */
+  kind: 'family' | 'friends';
   name: string;
   /** User ids. */
   members: string[];
+  /** Phase V — friends-kind groups only: every member's display name (family groups instead resolve names via `family.members`). */
+  memberNames?: Record<string, string>;
+  /** Phase V — friends-kind groups only: every member's current published public key (null if never published) — what conversationKeyFor() uses to derive/unwrap the conversation key. */
+  memberPublicKeys?: Record<string, string | null>;
 }
 
 export interface AppState {
@@ -295,6 +308,142 @@ function applyKeyRolls(ring: string[], rolls: { wrapped: string }[]): string[] {
   return keys;
 }
 
+// ── Phase V — friend conversation keying cache ─────────────────
+//
+// Module-level for the same reason as familyKeyRing above: fromServerMessage
+// is a plain exported function with no hook access, so it needs a
+// synchronous, non-React place to read from. Unlike family chat (one key per
+// family, all messages try the same ring), each friend conversation has its
+// OWN key — a DM's is pure X25519 Diffie-Hellman between the two members
+// (nothing stored server-side), a friend GROUP's is a random key wrapped
+// per-member (friend_group_keys) that this device unwraps with its own
+// pairwise DH secret. `groupsCache` mirrors state.groups (kept in sync by
+// upsertConversation/BOOTSTRAP) so fromServerMessage can look up a message's
+// conversation kind/members/public keys without threading `state` through
+// it. `resolvedConvoKeys` is a derived, fully-recomputable cache (never the
+// source of truth) — recomputing it for every friends-kind group is cheap at
+// friend-scale (a handful to dozens of conversations), so there's no
+// incremental-invalidation logic to get wrong.
+let myIdentity: { privB64: string; pubB64: string } | null = null;
+let myUserId: string | null = null;
+let groupsCache: Record<string, ChatGroup> = {};
+/** groupId -> my own wrapped copy of that friend GROUP's key (+ the wrapper's public key, so unwrapping never depends on the wrapper already being in this device's own friends list). Empty for a DM (no row is ever stored for one — see server/db/014_friend_convos.sql). */
+let friendGroupKeyWraps: Record<string, { wrapped: string; wrappedByPublicKey: string | null }> = {};
+/** groupId -> resolved symmetric key, for every friends-kind conversation this device can currently derive/unwrap. */
+let resolvedConvoKeys: Record<string, string> = {};
+
+/**
+ * The symmetric key for one friend conversation, or null if it can't be
+ * resolved yet (identity not loaded, or a group/DM-partner's public key
+ * hasn't been published/seen yet). Client rule (Phase V plan): a
+ * friend_group_keys entry for this group means "unwrap it"; otherwise it's a
+ * DM — derive directly with the other member. No-op (returns null
+ * immediately) for a family-kind group — those use activeKeyFor() instead.
+ */
+function conversationKeyFor(group: ChatGroup): string | null {
+  if (group.kind !== 'friends' || !myIdentity) return null;
+  const wrap = friendGroupKeyWraps[group.id];
+  if (wrap) {
+    if (!wrap.wrappedByPublicKey) return null;
+    const pairwise = deriveSharedKey(myIdentity.privB64, wrap.wrappedByPublicKey);
+    return unwrapKey(pairwise, wrap.wrapped);
+  }
+  if (!myUserId) return null;
+  const otherId = group.members.find((id) => id !== myUserId);
+  const otherPub = otherId ? group.memberPublicKeys?.[otherId] : undefined;
+  if (!otherId || !otherPub) return null;
+  return deriveSharedKey(myIdentity.privB64, otherPub);
+}
+
+/**
+ * The key to encrypt an OUTGOING message with for a given conversation — the
+ * resolved friend-conversation key for a friends-kind group (falling back to
+ * a fresh conversationKeyFor() attempt if the cache hasn't caught up yet),
+ * or the active family key for an e2ee family group. Null means either "send
+ * unencrypted" (a non-e2ee family — still allowed) or "can't send yet" (a
+ * friends-kind group whose key isn't resolvable on this device) — every
+ * friends-kind group is unconditionally encrypted server-side (Phase V), so
+ * screens should gate composing on a resolved key (see FriendThreadScreen)
+ * rather than let this silently fail server-side with a 400.
+ */
+function outgoingKeyFor(group: ChatGroup | undefined, family: FamilyState | null): string | null {
+  if (!group) return null;
+  if (group.kind === 'friends') return resolvedConvoKeys[group.id] ?? conversationKeyFor(group);
+  return family?.e2ee ? activeKeyFor(family.id) : null;
+}
+
+/** Recomputes every friends-kind group's key from scratch against the current identity/wraps/group data — see resolvedConvoKeys' comment above for why a full recompute (not incremental patching) is the deliberate choice here. */
+function recomputeFriendConvoKeys(groups: Record<string, ChatGroup>): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const g of Object.values(groups)) {
+    if (g.kind !== 'friends') continue;
+    const key = conversationKeyFor(g);
+    if (key) resolved[g.id] = key;
+  }
+  return resolved;
+}
+
+/**
+ * Single entry point for upserting ANY group (family or friends-kind) into
+ * the store — used by both the realtime `group` WS event and every group-
+ * mutating action below (openDm/createFriendGroup/renameGroup/…). Keeps
+ * groupsCache in sync and, for a friends-kind group, resolves/refreshes its
+ * conversation key and re-maps any now-decryptable locked messages via
+ * REDECRYPT_CONVO — same "plain function, bare dispatch" shape as
+ * applyIncomingKeyRoll. A no-op beyond the basic upsert for family groups
+ * (conversationKeyFor short-circuits on kind !== 'friends').
+ */
+export function upsertConversation(serverGroup: ServerGroup, dispatch: React.Dispatch<Action>): void {
+  const group = toChatGroup(serverGroup);
+  dispatch({ type: 'GROUP_UPSERT', group });
+
+  if (myUserId && !group.members.includes(myUserId)) {
+    // No longer a member (left, or removed) — drop the cached key material
+    // too, so a later re-add starts fresh rather than reusing a stale key.
+    const { [group.id]: _g, ...restGroups } = groupsCache;
+    groupsCache = restGroups;
+    const { [group.id]: _k, ...restKeys } = resolvedConvoKeys;
+    resolvedConvoKeys = restKeys;
+    return;
+  }
+
+  groupsCache = { ...groupsCache, [group.id]: group };
+  if (group.kind !== 'friends') return;
+  const key = conversationKeyFor(group);
+  if (!key || resolvedConvoKeys[group.id] === key) return;
+  resolvedConvoKeys = { ...resolvedConvoKeys, [group.id]: key };
+  dispatch({ type: 'REDECRYPT_CONVO', keys: { [group.id]: key } });
+}
+
+/**
+ * GET /sync's friend-conversation slice (full resend every sync, same as
+ * `friends` — see chat.js's getSyncSince) — merges the wrapped-key material
+ * in BEFORE upserting each group, so upsertConversation's key resolution
+ * sees fresh wraps on the very same pass instead of needing a second sync
+ * round-trip. Called from useRealtime.ts's sync().
+ */
+export function applyFriendGroupsSync(friendGroups: ServerGroup[], friendGroupKeys: FriendGroupKey[], dispatch: React.Dispatch<Action>): void {
+  friendGroupKeyWraps = {
+    ...friendGroupKeyWraps,
+    ...Object.fromEntries(friendGroupKeys.map((k) => [k.groupId, { wrapped: k.wrapped, wrappedByPublicKey: k.wrappedByPublicKey }])),
+  };
+  for (const g of friendGroups) upsertConversation(g, dispatch);
+}
+
+/** WS `friendGroupKey` event handler — a member (including possibly this device on a fresh add) just received their wrapped copy of a friend group's key. Mirrors applyIncomingKeyRoll's shape. */
+export function applyIncomingFriendGroupKey(
+  evt: { groupId: string; wrapped: string; wrappedBy: string; wrappedByPublicKey: string | null },
+  dispatch: React.Dispatch<Action>,
+): void {
+  friendGroupKeyWraps = { ...friendGroupKeyWraps, [evt.groupId]: { wrapped: evt.wrapped, wrappedByPublicKey: evt.wrappedByPublicKey } };
+  const group = groupsCache[evt.groupId];
+  if (!group) return; // the matching `group` upsert hasn't arrived yet — nothing to key/redecrypt yet
+  const key = conversationKeyFor(group);
+  if (!key || resolvedConvoKeys[evt.groupId] === key) return;
+  resolvedConvoKeys = { ...resolvedConvoKeys, [evt.groupId]: key };
+  dispatch({ type: 'REDECRYPT_CONVO', keys: { [evt.groupId]: key } });
+}
+
 // ── Server <-> store message mapping ─────────────────────────
 
 export function fromServerMessage(sm: ServerMessage): Message {
@@ -309,11 +458,30 @@ export function fromServerMessage(sm: ServerMessage): Message {
   };
 
   if (isEnvelope(sm.body)) {
+    const cipher = sm.body as string;
+    const group = groupsCache[sm.groupId];
+
+    // Phase V — a friends-kind conversation has its OWN key (see the caches
+    // above), never the family ring.
+    if (group?.kind === 'friends') {
+      const key = resolvedConvoKeys[sm.groupId];
+      const decrypted = key ? decryptPayload(key, cipher) : null;
+      if (decrypted) {
+        return {
+          ...base,
+          cipher,
+          text: decrypted.text,
+          loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
+          live: decrypted.loc?.live,
+        };
+      }
+      return { ...base, cipher, locked: true };
+    }
+
     // v1 is one family per user, so "the" cached ring (if any) is always the
     // right one to try — no groupId -> familyId lookup available here anyway.
     // Try every key we hold (Phase N — rotation means a message could have
     // been encrypted under any key in the ring, not just the newest).
-    const cipher = sm.body as string;
     const keys = familyKeyRing?.keys ?? [];
     const decrypted = keys.length ? decryptPayloadWithKeys(keys, cipher) : null;
     if (decrypted) {
@@ -340,7 +508,15 @@ export function fromServerMessage(sm: ServerMessage): Message {
 }
 
 function toChatGroup(g: ServerGroup): ChatGroup {
-  return { id: g.id, familyId: g.familyId, name: g.name, members: g.members };
+  return {
+    id: g.id,
+    familyId: g.familyId,
+    kind: g.kind,
+    name: g.name,
+    members: g.members,
+    memberNames: g.memberNames,
+    memberPublicKeys: g.memberPublicKeys,
+  };
 }
 
 /**
@@ -375,6 +551,11 @@ type Action =
   | { type: 'BOOTSTRAP'; payload: BootstrapResponse }
   | { type: 'MERGE_MESSAGES'; messages: Message[] }
   | { type: 'REDECRYPT'; keys: string[] }
+  // Phase V — same idea as REDECRYPT, but keyed per-conversation (each
+  // friends-kind group has its OWN key, unlike the single family ring) —
+  // `keys` maps groupId -> the resolved key, only messages in a matching
+  // group are re-attempted.
+  | { type: 'REDECRYPT_CONVO'; keys: Record<string, string> }
   | { type: 'MERGE_READ'; groupId: string; userId: string; ts: number }
   | { type: 'GROUP_UPSERT'; group: ChatGroup }
   | { type: 'GROUP_REMOVE'; groupId: string }
@@ -459,13 +640,30 @@ function reducer(state: AppState, action: Action): AppState {
         : { ...state, hydrated: true };
 
     case 'BOOTSTRAP': {
+      // Phase V — friend conversations (DMs + friend groups) ride alongside
+      // the active family's groups in the same flat `groups`/`messages`/…
+      // slices (tagged by `kind`), reusing every existing message/read-
+      // cursor/unread code path below instead of a parallel store.
+      const allGroups = [...action.payload.groups, ...action.payload.friendGroups];
       const groups: Record<string, ChatGroup> = {};
+      for (const g of allGroups) groups[g.id] = toChatGroup(g);
+
+      // Update the module-level friend-conversation-keying caches BEFORE
+      // mapping messages below — fromServerMessage() reads groupsCache/
+      // resolvedConvoKeys to pick each friends-kind message's decryption key
+      // (see that section's header comment for why this lives outside React
+      // state, same rationale as familyKeyRing).
+      groupsCache = groups;
+      friendGroupKeyWraps = Object.fromEntries(
+        action.payload.friendGroupKeys.map((k) => [k.groupId, { wrapped: k.wrapped, wrappedByPublicKey: k.wrappedByPublicKey }]),
+      );
+      resolvedConvoKeys = recomputeFriendConvoKeys(groups);
+
       const messages: Record<string, Message[]> = {};
       const readCursors: Record<string, Record<string, number>> = {};
       const unread: Record<string, number> = {};
       const hasMore: Record<string, boolean> = {};
-      for (const g of action.payload.groups) {
-        groups[g.id] = { id: g.id, familyId: g.familyId, name: g.name, members: g.members };
+      for (const g of allGroups) {
         messages[g.id] = g.latest.map(fromServerMessage);
         const cursors: Record<string, number> = {};
         for (const [userId, iso] of Object.entries(g.cursors)) cursors[userId] = Date.parse(iso);
@@ -590,6 +788,41 @@ function reducer(state: AppState, action: Action): AppState {
         messages: messagesChanged ? messages : state.messages,
         notes: notesChanged ? notes : state.notes,
       };
+    }
+
+    // Phase V — same idea as REDECRYPT, but `action.keys` maps groupId ->
+    // that ONE conversation's resolved key (each friends-kind conversation
+    // has its own key, unlike the single family ring), and only locked
+    // messages in a matching group are re-attempted — a single-key
+    // decryptPayload, not a ring walk (friend conversations have no
+    // rotation in v1: a member-add re-wraps the SAME key, never a new one).
+    case 'REDECRYPT_CONVO': {
+      let changed = false;
+      const messages: Record<string, Message[]> = {};
+      for (const [groupId, msgs] of Object.entries(state.messages)) {
+        const key = action.keys[groupId];
+        if (!key) {
+          messages[groupId] = msgs;
+          continue;
+        }
+        let groupChanged = false;
+        const next = msgs.map((m) => {
+          if (!m.locked || !m.cipher) return m;
+          const decrypted = decryptPayload(key, m.cipher);
+          if (!decrypted) return m;
+          groupChanged = true;
+          return {
+            ...m,
+            locked: undefined,
+            text: decrypted.text,
+            loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
+            live: decrypted.loc?.live,
+          };
+        });
+        messages[groupId] = groupChanged ? next : msgs;
+        if (groupChanged) changed = true;
+      }
+      return changed ? { ...state, messages } : state;
     }
 
     case 'MERGE_READ': {
@@ -1067,7 +1300,20 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         }
         if (cancelled) return;
         await apiPublishKey(token, keypair.pubB64);
-        if (!cancelled) dispatch({ type: 'SET_IDENTITY_READY', value: true });
+        if (cancelled) return;
+        // Phase V — populate the module-level identity cache that
+        // conversationKeyFor()/fromServerMessage() read from (mirrors
+        // familyKeyRing's "module-level for a non-hook reader" rationale),
+        // then re-resolve every friends-kind conversation already in
+        // groupsCache (bootstrap may have already populated it before this
+        // resolved — order between the two async effects isn't guaranteed
+        // either way) and unlock any newly-decryptable messages.
+        myIdentity = keypair;
+        myUserId = state.session?.userId ?? null;
+        const resolved = recomputeFriendConvoKeys(groupsCache);
+        resolvedConvoKeys = resolved;
+        dispatch({ type: 'SET_IDENTITY_READY', value: true });
+        if (Object.keys(resolved).length) dispatch({ type: 'REDECRYPT_CONVO', keys: resolved });
       } catch (err) {
         console.warn('[store] identity key publish failed', err);
       }
@@ -1183,7 +1429,7 @@ export function useActions() {
         const msg: Message = { id, groupId, authorId, kind: 'text', text, ts: Date.now() };
         dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
         if (!token) return;
-        const key = state.family?.e2ee ? activeKeyFor(state.family.id) : null;
+        const key = outgoingKeyFor(state.groups[groupId], state.family);
         const bodyPromise = key ? encryptPayload(key, { text }) : Promise.resolve(text);
         bodyPromise
           .then((body) => postMessage(token, groupId, { id, kind: 'text', body }))
@@ -1198,7 +1444,7 @@ export function useActions() {
         const msg: Message = { id, groupId, authorId, kind: 'loc', loc, live, ts: Date.now() };
         dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
         if (!token) return;
-        const key = state.family?.e2ee ? activeKeyFor(state.family.id) : null;
+        const key = outgoingKeyFor(state.groups[groupId], state.family);
         if (key) {
           // Encrypted loc rides inside the envelope body — the server's `loc`
           // column stays NULL for this message (see chat.js's createMessage).
@@ -1698,6 +1944,15 @@ export function useActions() {
         await tokenStorage.clear().catch(() => {});
         await AsyncStorage.removeItem(ACTIVE_FAMILY_KEY).catch(() => {});
         familyKeyRing = null;
+        // Phase V — clear every friend-conversation keying cache too, same
+        // rationale as familyKeyRing: the next login's identity-ready effect
+        // + bootstrap re-populate them from scratch for whichever account
+        // signs in next.
+        myIdentity = null;
+        myUserId = null;
+        groupsCache = {};
+        friendGroupKeyWraps = {};
+        resolvedConvoKeys = {};
         apiSetActiveFamilyId(null);
         dispatch({ type: 'LOGOUT' });
       },
@@ -1849,8 +2104,83 @@ export function useActions() {
         dispatch({ type: 'FRIEND_UPSERT', friend });
         return friend;
       },
+
+      // ── Friend chat: 1:1 DMs + friend groups (Phase V) ─────────
+      //
+      // Friend conversations live in the SAME `groups`/`messages`/… slices as
+      // family chat (tagged `kind: 'friends'`) — see upsertConversation's
+      // header comment. Every mutation below routes its server response
+      // through upsertConversation instead of a bare GROUP_UPSERT dispatch,
+      // so the module-level keying caches (groupsCache/resolvedConvoKeys)
+      // stay in sync and any newly-decryptable messages get REDECRYPT_CONVO'd.
+
+      /** Finds or creates the 1:1 DM with a friend — idempotent (calling it again just returns the same conversation). */
+      openDm: async (friendId: string): Promise<ChatGroup> => {
+        if (!token) throw new Error('not signed in');
+        const { group } = await apiOpenDm(token, friendId);
+        upsertConversation(group, dispatch);
+        return toChatGroup(group);
+      },
+
+      /**
+       * Creates a friend group: generates a random 32-byte key client-side
+       * and wraps a copy to EVERY member (including the creator) under that
+       * member's pairwise X25519 DH secret — the exact Phase N key-roll
+       * construction, just keyed by deriveSharedKey instead of a previous
+       * family key. The server only ever sees the wrapped (ciphertext) copies.
+       */
+      createFriendGroup: async (name: string, memberIds: string[]): Promise<ChatGroup> => {
+        if (!token || !state.session) throw new Error('not signed in');
+        if (!myIdentity) throw new Error("This device doesn't have an identity key yet — try again in a moment");
+        const myId = state.session.userId;
+        const allMembers = [...new Set([myId, ...memberIds])];
+        const groupKey = await generateFamilyKey();
+        const wrappedKeys: Record<string, string> = {};
+        for (const memberId of allMembers) {
+          const memberPub = memberId === myId ? myIdentity.pubB64 : state.friends.find((f) => f.id === memberId)?.publicKey;
+          if (!memberPub) throw new Error("Missing a selected friend's public key — ask them to reopen the app and try again");
+          const pairwise = deriveSharedKey(myIdentity.privB64, memberPub);
+          wrappedKeys[memberId] = await wrapKey(pairwise, groupKey);
+        }
+        const { group } = await apiCreateFriendGroup(token, { name, memberIds, wrappedKeys });
+        // I already hold the plaintext key — seed the cache directly instead
+        // of round-tripping through an unwrap (equivalent result either way).
+        resolvedConvoKeys = { ...resolvedConvoKeys, [group.id]: groupKey };
+        upsertConversation(group, dispatch);
+        return toChatGroup(group);
+      },
+
+      renameFriendGroup: async (groupId: string, name: string) => {
+        if (!token) throw new Error('not signed in');
+        const { group } = await apiRenameFriendGroup(token, groupId, name);
+        upsertConversation(group, dispatch);
+      },
+
+      /** Adds a friend to an existing friend group — wraps the CURRENT group key to them under our pairwise DH secret (mirrors Phase N: any current key holder can extend access to a newcomer). */
+      addFriendGroupMember: async (groupId: string, memberId: string) => {
+        if (!token || !myIdentity) throw new Error("This device isn't ready yet — try again in a moment");
+        const group = state.groups[groupId];
+        const groupKey = group ? resolvedConvoKeys[groupId] ?? conversationKeyFor(group) : undefined;
+        if (!group || !groupKey) throw new Error("This device doesn't hold this conversation's key yet");
+        const memberPub = state.friends.find((f) => f.id === memberId)?.publicKey;
+        if (!memberPub) throw new Error("Missing that friend's public key — ask them to reopen the app and try again");
+        const pairwise = deriveSharedKey(myIdentity.privB64, memberPub);
+        const wrapped = await wrapKey(pairwise, groupKey);
+        const { group: updated } = await apiAddFriendGroupMember(token, groupId, { memberId, wrapped });
+        upsertConversation(updated, dispatch);
+      },
+
+      leaveFriendGroup: async (groupId: string) => {
+        if (!token) throw new Error('not signed in');
+        await apiLeaveFriendGroup(token, groupId);
+        dispatch({ type: 'GROUP_REMOVE', groupId });
+        const { [groupId]: _g, ...restGroups } = groupsCache;
+        groupsCache = restGroups;
+        const { [groupId]: _k, ...restKeys } = resolvedConvoKeys;
+        resolvedConvoKeys = restKeys;
+      },
     }),
-    [dispatch, token, state.session, state.family, state.families, state.activeFamilyId, state.messages, state.grocery, state.tasks, state.events, state.notes, state.albums],
+    [dispatch, token, state.session, state.family, state.families, state.activeFamilyId, state.messages, state.grocery, state.tasks, state.events, state.notes, state.albums, state.groups, state.friends],
   );
 }
 
@@ -1880,23 +2210,65 @@ export function useChatRows(): ChatRow[] {
   return useMemo(() => {
     const myId = state.session?.userId;
     const nameOf = (id: string) => state.family?.members.find((m) => m.id === id)?.name ?? id;
-    const rows = Object.values(state.groups).map((g): ChatRow & { _lastTs: number } => {
-      const msgs = state.messages[g.id];
-      const last = msgs && msgs.length ? msgs[msgs.length - 1] : undefined;
-      return {
-        id: g.id,
-        name: g.name,
-        members: g.members.length > 2 ? g.members.length : null,
-        preview: messagePreview(last, myId, nameOf),
-        time: last ? timeLabel(last.ts) : '',
-        unread: state.unread[g.id] ?? 0,
-        live: !!state.live[g.id],
-        _lastTs: last?.ts ?? 0,
-      };
-    });
+    // Phase V — friend conversations live in the same `groups` slice (tagged
+    // `kind`) but have their own tab/list (FriendsListScreen) — exclude them
+    // here so they don't also show up in the family Chats tab.
+    const rows = Object.values(state.groups)
+      .filter((g) => g.kind !== 'friends')
+      .map((g): ChatRow & { _lastTs: number } => {
+        const msgs = state.messages[g.id];
+        const last = msgs && msgs.length ? msgs[msgs.length - 1] : undefined;
+        return {
+          id: g.id,
+          name: g.name,
+          members: g.members.length > 2 ? g.members.length : null,
+          preview: messagePreview(last, myId, nameOf),
+          time: last ? timeLabel(last.ts) : '',
+          unread: state.unread[g.id] ?? 0,
+          live: !!state.live[g.id],
+          _lastTs: last?.ts ?? 0,
+        };
+      });
     rows.sort((a, b) => b._lastTs - a._lastTs || a.name.localeCompare(b.name));
     return rows.map(({ _lastTs, ...row }) => row);
   }, [state.groups, state.messages, state.unread, state.live, state.session, state.family]);
+}
+
+/** A friends-kind group's display name: a DM (<=2 members) shows the OTHER member's name (there's no meaningful single "group name" for two people — see friendChat.js's openDm); a named friend group shows its own name. */
+export function friendConvoDisplayName(g: ChatGroup, myId: string | undefined): string {
+  if (g.members.length <= 2) {
+    const otherId = g.members.find((id) => id !== myId);
+    const otherName = otherId ? g.memberNames?.[otherId] : undefined;
+    if (otherName) return otherName;
+  }
+  return g.name;
+}
+
+/** Phase V — every friend conversation (1:1 DMs + friend groups) as chat-list rows, same shape/sort as useChatRows() — drives the Friends tab's conversation list. */
+export function useFriendChatRows(): ChatRow[] {
+  const { state } = useCtx();
+  return useMemo(() => {
+    const myId = state.session?.userId;
+    const rows = Object.values(state.groups)
+      .filter((g) => g.kind === 'friends')
+      .map((g): ChatRow & { _lastTs: number } => {
+        const msgs = state.messages[g.id];
+        const last = msgs && msgs.length ? msgs[msgs.length - 1] : undefined;
+        const nameOf = (id: string) => g.memberNames?.[id] ?? id;
+        return {
+          id: g.id,
+          name: friendConvoDisplayName(g, myId),
+          members: g.members.length > 2 ? g.members.length : null,
+          preview: messagePreview(last, myId, nameOf),
+          time: last ? timeLabel(last.ts) : '',
+          unread: state.unread[g.id] ?? 0,
+          live: !!state.live[g.id],
+          _lastTs: last?.ts ?? 0,
+        };
+      });
+    rows.sort((a, b) => b._lastTs - a._lastTs || a.name.localeCompare(b.name));
+    return rows.map(({ _lastTs, ...row }) => row);
+  }, [state.groups, state.messages, state.unread, state.live, state.session]);
 }
 
 export function useMessages(groupId: string): Message[] {
@@ -2010,6 +2382,26 @@ export function useSessionReady(): boolean {
 export function useE2EE(): { enabled: boolean; hasKey: boolean } {
   const { state } = useCtx();
   return { enabled: !!state.family?.e2ee, hasKey: state.hasFamilyKey };
+}
+
+/**
+ * Phase V — whether this device can currently derive/unwrap `groupId`'s
+ * friend-conversation key (mirrors useE2EE().hasKey for family chat) —
+ * drives FriendThreadScreen's composer gate ("can't send yet" vs. locked
+ * history). Reads the module-level resolvedConvoKeys cache directly (there's
+ * no dedicated React state field for it — see upsertConversation/
+ * REDECRYPT_CONVO's comments) via useSyncExternalStore-free polling: every
+ * mutation that can change it (BOOTSTRAP, GROUP_UPSERT, REDECRYPT_CONVO) is
+ * itself a dispatch that changes `state`, so any component subscribed to
+ * this store (which every screen using this hook already is) re-renders and
+ * re-reads the fresh value — no extra subscription plumbing needed.
+ */
+export function useConversationKeyReady(groupId: string | undefined): boolean {
+  const { state } = useCtx();
+  // The `state` reference itself is unused beyond forcing this hook to
+  // re-evaluate on every store change — see the comment above.
+  void state;
+  return !!groupId && !!resolvedConvoKeys[groupId];
 }
 
 /** The shared grocery list, sorted unchecked-first then by creation order. */

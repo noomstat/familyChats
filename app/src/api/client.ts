@@ -162,10 +162,17 @@ export interface ServerMessage {
 
 export interface ServerGroup {
   id: string;
-  familyId: string;
+  /** null for a friends-kind group (Phase V) — friend conversations have no family. */
+  familyId: string | null;
+  /** Phase V — 'family' (the pre-existing default) or 'friends' (a 1:1 DM or friend group). */
+  kind: 'family' | 'friends';
   name: string;
   /** User ids. */
   members: string[];
+  /** Phase V — friends-kind groups only: every member's display name, so the client can render without depending on the viewer's own friends list covering every member. */
+  memberNames?: Record<string, string>;
+  /** Phase V — friends-kind groups only: every member's current published public key (null if they've never published one) — what `conversationKeyFor` uses to derive a DM key or verify a group-key unwrap. */
+  memberPublicKeys?: Record<string, string | null>;
 }
 
 export interface BootstrapGroup extends ServerGroup {
@@ -175,6 +182,23 @@ export interface BootstrapGroup extends ServerGroup {
   lastReadTs: string | null;
   /** Every member's read cursor (ISO), keyed by user id. */
   cursors: Record<string, string>;
+}
+
+/**
+ * Phase V — `userId`'s own wrapped copy of a friend GROUP's (3+ member) key,
+ * as produced client-side by wrapKey(deriveSharedKey(myPriv, wrapperPub),
+ * groupKey) — see app/src/crypto/e2ee.ts. `wrappedByPublicKey` rides along
+ * so the client can unwrap via deriveSharedKey(myPriv, wrappedByPublicKey)
+ * even if `wrappedBy` isn't (yet) in the viewer's own friends list — the
+ * wrap is keyed specifically to that public key, not "any friend's" key. A
+ * 1:1 DM has NO entry here — its key is pure DH, nothing wrapped/stored.
+ */
+export interface FriendGroupKey {
+  groupId: string;
+  /** e2e:1: envelope — the group key, encrypted under the pairwise DH secret with `wrappedBy`. */
+  wrapped: string;
+  wrappedBy: string;
+  wrappedByPublicKey: string | null;
 }
 
 export interface BootstrapResponse {
@@ -196,6 +220,10 @@ export interface BootstrapResponse {
   notes: ServerNote[];
   /** Phase U — user-level and family-independent: present even for a family-less user. */
   friends: Friend[];
+  /** Phase V — every friend conversation (1:1 DMs + friend groups) the user belongs to, regardless of the active family — same bootstrap shape (latest/unread/cursors) as `groups`. */
+  friendGroups: BootstrapGroup[];
+  /** Phase V — this user's wrapped copy of every friend GROUP key they hold. */
+  friendGroupKeys: FriendGroupKey[];
   serverTime: string;
 }
 
@@ -219,6 +247,10 @@ export interface SyncResponse {
   notes: ServerNote[];
   /** Phase U — full current list, like grocery/tasks/events; user-level and family-independent. */
   friends: Friend[];
+  /** Phase V — full current list of friend conversations' metadata (no `latest` — new messages/reads ride the `messages`/`reads` fields above, which already cover every group the user belongs to regardless of family). */
+  friendGroups: ServerGroup[];
+  /** Phase V — full current list, like `friends`. */
+  friendGroupKeys: FriendGroupKey[];
   serverTime: string;
 }
 
@@ -775,6 +807,42 @@ export function getFriendCode(token: string) {
 /** Instant-connect from a scanned/typed friend code: `friendId`+`token` come from parseFriendCode(), `myPublicKey` from this device's identity keypair. */
 export function connectByQr(token: string, input: { friendId: string; token: string; myPublicKey: string }) {
   return api<{ friend: Friend }>('/friends/connect', { method: 'POST', body: input, token });
+}
+
+// ── Friend chat: 1:1 DMs + friend groups (Phase V) ──────────────
+//
+// Family-independent, same as the rest of Friends. Messages/reads for these
+// conversations reuse getGroupMessages/postMessage/postRead above unchanged
+// — a friend conversation is just a group whose `kind` is 'friends'.
+
+/** Find-or-create the 1:1 DM with a friend — idempotent (same call again just returns the same conversation). */
+export function openDm(token: string, friendId: string) {
+  return api<{ group: ServerGroup }>('/friends/dm', { method: 'POST', body: { friendId }, token });
+}
+
+/**
+ * Creates a friend group. `wrappedKeys` is a `{ [memberId]: wrapped }` map
+ * built entirely client-side — one entry per member (including the
+ * creator), each `wrapKey(deriveSharedKey(myPriv, memberPub), groupKey)` —
+ * see crypto/e2ee.ts. The server only checks that every member has an
+ * entry, never what's inside it.
+ */
+export function createFriendGroup(token: string, input: { name: string; memberIds: string[]; wrappedKeys: Record<string, string> }) {
+  return api<{ group: ServerGroup }>('/friends/groups', { method: 'POST', body: input, token });
+}
+
+export function renameFriendGroup(token: string, groupId: string, name: string) {
+  return api<{ group: ServerGroup }>(`/friends/groups/${groupId}`, { method: 'PATCH', body: { name }, token });
+}
+
+/** Adds `memberId` to a friend group — `wrapped` is the group key wrapped for them under deriveSharedKey(myPriv, memberPub), same construction as createFriendGroup's per-member entries. */
+export function addFriendGroupMember(token: string, groupId: string, input: { memberId: string; wrapped: string }) {
+  return api<{ group: ServerGroup }>(`/friends/groups/${groupId}/members`, { method: 'POST', body: input, token });
+}
+
+/** Leaves a friend group (self-removal only). */
+export function leaveFriendGroup(token: string, groupId: string) {
+  return api<{ group: ServerGroup }>(`/friends/groups/${groupId}/leave`, { method: 'POST', token });
 }
 
 // ── Realtime ─────────────────────────────────────────────────
