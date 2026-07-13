@@ -5,7 +5,7 @@
 import { useEffect, useRef } from 'react';
 import { AppState as RNAppState, AppStateStatus } from 'react-native';
 import { getBootstrap, getSync, getWsUrl } from '../api/client';
-import { fromServerMessage, useLastSync, useSession, useStoreDispatch } from './AppStore';
+import { applyIncomingKeyRoll, applyIncomingKeyRolls, fromServerMessage, useLastSync, useSession, useStoreDispatch } from './AppStore';
 
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
@@ -30,6 +30,11 @@ export function useRealtime(): void {
       try {
         if (lastSyncRef.current) {
           const data = await getSync(session.token, lastSyncRef.current);
+          // Apply any key rolls we missed while offline BEFORE mapping the new
+          // messages, so post-rotation messages decrypt on first pass instead
+          // of flashing locked and waiting for the REDECRYPT that these rolls
+          // would otherwise trigger.
+          if (data.keyRolls.length) applyIncomingKeyRolls(data.keyRolls, dispatch);
           if (data.messages.length) {
             dispatch({ type: 'MERGE_MESSAGES', messages: data.messages.map(fromServerMessage) });
           }
@@ -99,6 +104,14 @@ export function useRealtime(): void {
             // the joiner's own device or after a re-login.
             else if (data.action === 'members' && data.familyId && data.members) {
               dispatch({ type: 'FAMILY_PATCH', patch: { id: data.familyId, members: data.members } });
+            }
+            // Phase N — a member rotated the family key. `roll` carries the
+            // wrapped-key envelope; applyIncomingKeyRoll fixpoint-replays it
+            // into our in-memory ring (module-level in AppStore.tsx) and
+            // dispatches REDECRYPT itself if that recovers a new key — same
+            // "plain function, bare dispatch" shape as fromServerMessage.
+            else if (data.action === 'keyroll' && data.roll) {
+              applyIncomingKeyRoll(data.roll, dispatch);
             }
             break;
           case 'grocery':

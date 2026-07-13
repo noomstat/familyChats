@@ -91,16 +91,17 @@ type Family = NonNullable<ReturnType<typeof useFamily>>;
 /**
  * Phase M — e2ee status card. Encryption is always on for every family (no
  * opt-in, no disable), so this always shows the "encrypted" state: the badge
- * plus the extended invite (re-derived from the locally-stored key, since the
- * server never has it) with a share affordance.
+ * plus the extended invite (re-derived from the locally-stored anchor key,
+ * since the server never has it) with a share affordance. Phase N adds an
+ * owner-only rotate-key row below it.
  */
 function E2EECard({ family }: { family: Family }) {
   const [keyB64, setKeyB64] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    keyStorage.get(family.id).then((k) => {
-      if (!cancelled) setKeyB64(k);
+    keyStorage.getRing(family.id).then((keys) => {
+      if (!cancelled) setKeyB64(keys?.[0] ?? null); // index 0 = the original invite/anchor key — the invite is always built from that, even post-rotation
     });
     return () => {
       cancelled = true;
@@ -144,6 +145,65 @@ function E2EECard({ family }: { family: Family }) {
           This device doesn't have the key yet — open a chat to enter it.
         </Text>
       )}
+      {family.role === 'owner' && <RotateKeyRow />}
     </Card>
+  );
+}
+
+/**
+ * Phase N — owner-only manual rotation. Confirm-inline (same tap-to-arm
+ * pattern as AlbumScreen's photo delete, rather than a native Alert — this
+ * codebase has no Alert/modal usage) then a short inline status line doubling
+ * as the "toast". Non-owners never see this row (gated by the caller above).
+ */
+function RotateKeyRow() {
+  const actions = useActions();
+  const [phase, setPhase] = useState<'idle' | 'confirm' | 'rotating' | 'done' | 'error'>('idle');
+
+  const rotate = async () => {
+    setPhase('rotating');
+    try {
+      await actions.rotateKey();
+      setPhase('done');
+    } catch {
+      setPhase('error');
+    } finally {
+      setTimeout(() => setPhase('idle'), 3000);
+    }
+  };
+
+  return (
+    <View style={{ borderTopWidth: 1, borderTopColor: semantic.borderSubtle, paddingTop: 10, gap: 8 }}>
+      {phase === 'idle' && (
+        <Pressable onPress={() => setPhase('confirm')} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Icon name="refresh-cw" size={16} color={semantic.textBody} />
+          <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 14, color: semantic.textStrong }}>
+            Rotate encryption key
+          </Text>
+          <Icon name="chevron-right" size={16} color={semantic.textFaint} />
+        </Pressable>
+      )}
+      {phase === 'confirm' && (
+        <View style={{ gap: 8 }}>
+          <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted }}>
+            Generates a fresh key for new messages. Everyone currently in the family keeps reading every past
+            message — this doesn't remove anyone's access.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button size="sm" variant="secondary" onPress={rotate}>
+              Rotate now
+            </Button>
+            <Button size="sm" variant="ghost" onPress={() => setPhase('idle')}>
+              Cancel
+            </Button>
+          </View>
+        </View>
+      )}
+      {phase === 'rotating' && <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted }}>Rotating…</Text>}
+      {phase === 'done' && (
+        <Text style={{ fontSize: fontSize.bodySm, color: semantic.brand }}>New key generated — old messages stay readable.</Text>
+      )}
+      {phase === 'error' && <Text style={{ fontSize: fontSize.bodySm, color: semantic.danger }}>Rotation failed — try again.</Text>}
+    </View>
   );
 }

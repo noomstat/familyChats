@@ -55,6 +55,7 @@ import {
   Shield,
   KeyRound,
   Copy,
+  RefreshCw,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -118,6 +119,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   shield: Shield,
   key: KeyRound,
   copy: Copy,
+  'refresh-cw': RefreshCw,
 };
 
 export type IconName = keyof typeof REGISTRY;

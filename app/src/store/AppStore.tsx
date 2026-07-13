@@ -13,13 +13,14 @@ import {
 } from './model';
 import { tokenStorage } from './tokenStorage';
 import { keyStorage } from './keyStorage';
-import { decryptPayload, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput } from '../crypto/e2ee';
+import { decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput, unwrapKey, wrapKey } from '../crypto/e2ee';
 import {
   BootstrapResponse,
   CategoryId,
   EventPatch,
   FamilyInfo,
   FamilyMember,
+  KeyRoll,
   ReceiptScan,
   ServerAlbum,
   ServerBudget,
@@ -51,6 +52,7 @@ import {
   getGroupMessages,
   getMe,
   joinFamily as apiJoinFamily,
+  postKeyRoll,
   postMessage,
   postRead,
   putBudget as apiPutBudget,
@@ -150,9 +152,9 @@ export interface AppState {
   family: FamilyState | null;
   /** True once the initial secure-store token check (and /me call) has settled. */
   sessionReady: boolean;
-  /** Phase K — true once the current family's E2EE key is loaded into the
-   * module-level familyKeyCache (see below). Not persisted — re-derived from
-   * keyStorage each launch, same as session/family. Drives useE2EE()'s
+  /** Phase K/N — true once the current family's E2EE keyring is loaded into
+   * the module-level familyKeyRing (see below). Not persisted — re-derived
+   * from keyStorage each launch, same as session/family. Drives useE2EE()'s
    * `hasKey` so locked-message UI can react without reading the cache directly. */
   hasFamilyKey: boolean;
 }
@@ -184,17 +186,61 @@ const seedState: AppState = {
   hasFamilyKey: false,
 };
 
-// ── E2EE family key cache ────────────────────────────────────
+// ── E2EE family keyring cache ────────────────────────────────
 //
 // Module-level (not component state) so fromServerMessage — a plain exported
 // function with no hook access — can decrypt synchronously. v1 is one family
 // per user, so a single slot (not keyed per-family-id beyond the guard below)
-// is sufficient; the familyId is kept alongside the key purely as a staleness
-// guard against a leftover cache entry from a previously-loaded family.
-// Populated: on family load, after createFamily(), after importFamilyKey(),
-// and after joinFamily() when the invite carried a key. Cleared on logout.
-// AppState.hasFamilyKey mirrors this for reactive UI (useE2EE()).
-let familyKeyCache: { familyId: string; keyB64: string } | null = null;
+// is sufficient; the familyId is kept alongside the keys purely as a
+// staleness guard against a leftover cache entry from a previously-loaded
+// family. Populated: on family load, after createFamily(), after
+// importFamilyKey(), after joinFamily() when the invite carried a key, after
+// rotateKey(), and after an incoming WS `keyroll` (see applyIncomingKeyRoll).
+// Cleared on logout. AppState.hasFamilyKey mirrors this for reactive UI
+// (useE2EE()).
+//
+// Phase N — `keys` is the full ring, oldest-first (index 0 = the anchor key
+// from the invite, last = active/used to encrypt new messages). Rotation
+// never removes a key, so every current member keeps reading all history —
+// see e2ee.ts's header comment for the full trade-off writeup.
+let familyKeyRing: { familyId: string; keys: string[] } | null = null;
+
+/** The key currently used to encrypt outgoing messages, or null if we hold no ring for this family (or it's a different/stale one). */
+function activeKeyFor(familyId: string | undefined): string | null {
+  if (!familyId || !familyKeyRing || familyKeyRing.familyId !== familyId) return null;
+  return familyKeyRing.keys[familyKeyRing.keys.length - 1] ?? null;
+}
+
+/**
+ * Fixpoint replay: repeatedly try `unwrapKey(k, roll.wrapped)` for every key
+ * currently in `ring` against every roll, appending any newly-recovered key,
+ * until a full pass adds nothing. Order-independent (rolls can arrive/replay
+ * in any order) and gap-tolerant (a roll wrapped under a key this ring
+ * doesn't have yet just waits for a later pass once that key shows up).
+ * Never mutates `ring` — returns the SAME reference when nothing new was
+ * recovered, so callers can cheaply check `next !== ring` to decide whether
+ * to persist + REDECRYPT.
+ */
+function applyKeyRolls(ring: string[], rolls: { wrapped: string }[]): string[] {
+  let keys = ring;
+  const known = new Set(keys);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const roll of rolls) {
+      for (const k of keys) {
+        const recovered = unwrapKey(k, roll.wrapped);
+        if (recovered && !known.has(recovered)) {
+          keys = [...keys, recovered];
+          known.add(recovered);
+          grew = true;
+          break; // this roll is resolved for now — move on to the next one
+        }
+      }
+    }
+  }
+  return keys;
+}
 
 // ── Server <-> store message mapping ─────────────────────────
 
@@ -210,11 +256,13 @@ export function fromServerMessage(sm: ServerMessage): Message {
   };
 
   if (isEnvelope(sm.body)) {
-    // v1 is one family per user, so "the" cached key (if any) is always the
+    // v1 is one family per user, so "the" cached ring (if any) is always the
     // right one to try — no groupId -> familyId lookup available here anyway.
+    // Try every key we hold (Phase N — rotation means a message could have
+    // been encrypted under any key in the ring, not just the newest).
     const cipher = sm.body as string;
-    const keyB64 = familyKeyCache?.keyB64;
-    const decrypted = keyB64 ? decryptPayload(keyB64, cipher) : null;
+    const keys = familyKeyRing?.keys ?? [];
+    const decrypted = keys.length ? decryptPayloadWithKeys(keys, cipher) : null;
     if (decrypted) {
       return {
         ...base,
@@ -248,7 +296,7 @@ type Action =
   | { type: 'HYDRATE'; payload: Persisted | null }
   | { type: 'BOOTSTRAP'; payload: BootstrapResponse }
   | { type: 'MERGE_MESSAGES'; messages: Message[] }
-  | { type: 'REDECRYPT'; keyB64: string }
+  | { type: 'REDECRYPT'; keys: string[] }
   | { type: 'MERGE_READ'; groupId: string; userId: string; ts: number }
   | { type: 'GROUP_UPSERT'; group: ChatGroup }
   | { type: 'GROUP_REMOVE'; groupId: string }
@@ -394,12 +442,15 @@ function reducer(state: AppState, action: Action): AppState {
     }
 
     // Phase L — re-maps every locked message holding a `cipher` through
-    // decryptPayload now that `keyB64` is available (see the key-load
+    // decryptPayloadWithKeys now that `keys` is available (see the key-load
     // effect below). Pure/synchronous/no network — this is what lets a
     // cold hydrate-from-storage (where E2EE messages are persisted as
     // ciphertext-only, never plaintext) come back readable offline as soon
-    // as the family key loads from local keyStorage. Messages that fail to
-    // decrypt (still no key, wrong key, tamper) are left untouched.
+    // as the family keyring loads from local keyStorage. Messages that fail
+    // to decrypt (still no matching key, tamper) are left untouched.
+    // Phase N — `keys` is the whole ring, not one key, so a message that
+    // arrived encrypted under a just-rotated-in key (before its roll was
+    // applied) unlocks here too, not just messages under the anchor key.
     case 'REDECRYPT': {
       let changed = false;
       const messages: Record<string, Message[]> = {};
@@ -407,7 +458,7 @@ function reducer(state: AppState, action: Action): AppState {
         let groupChanged = false;
         const next = msgs.map((m) => {
           if (!m.locked || !m.cipher) return m;
-          const decrypted = decryptPayload(action.keyB64, m.cipher);
+          const decrypted = decryptPayloadWithKeys(action.keys, m.cipher);
           if (!decrypted) return m;
           groupChanged = true;
           return {
@@ -638,6 +689,36 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
+/**
+ * Phase N — apply one incoming key roll (WS `keyroll` event, routed here by
+ * useRealtime.ts) to the in-memory ring: fixpoint replay against every key
+ * currently held. A plain exported function (not a hook) so the realtime
+ * bridge — which only has a bare dispatch, same as fromServerMessage's
+ * caller — can call it directly. No-op if we're not tracking a ring for this
+ * roll's family, or if the ring already recovers nothing new from it (a
+ * duplicate delivery, or a roll wrapped under a key we don't hold yet —
+ * that'll resolve on a later roll or the next bootstrap's replay instead).
+ */
+export function applyIncomingKeyRolls(rolls: { familyId: string; wrapped: string }[], dispatch: React.Dispatch<Action>): void {
+  if (!familyKeyRing || !rolls.length) return;
+  const familyId = familyKeyRing.familyId;
+  const relevant = rolls.filter((r) => r.familyId === familyId);
+  if (!relevant.length) return;
+  // One fixpoint pass over the WHOLE batch (not per-roll) so a chain like
+  // R2=enc(K1,K2) that arrives alongside R1=enc(K0,K1) still resolves — a
+  // per-roll loop would apply R2 before K1 exists and never re-attempt it.
+  const next = applyKeyRolls(familyKeyRing.keys, relevant);
+  if (next === familyKeyRing.keys) return;
+  familyKeyRing = { familyId, keys: next };
+  keyStorage.setRing(familyId, next).catch((err) => console.warn('[store] key roll persist failed', err));
+  dispatch({ type: 'REDECRYPT', keys: next });
+}
+
+/** Single-roll convenience for the WS `keyroll` broadcast path (see useRealtime.ts). */
+export function applyIncomingKeyRoll(roll: { familyId: string; wrapped: string }, dispatch: React.Dispatch<Action>): void {
+  applyIncomingKeyRolls([roll], dispatch);
+}
+
 // ── Context ──────────────────────────────────────────────────
 
 interface AppContextValue {
@@ -681,9 +762,9 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   // envelope — see fromServerMessage) is stripped down to ciphertext +
   // metadata only (id/groupId/authorId/kind/ts/cipher, forced `locked:
   // true`) before it's serialized, same as if we'd never had the key. The
-  // REDECRYPT reducer action re-maps these back through decryptPayload the
-  // next time familyKeyCache is populated (see the key-load effect below) —
-  // that's what keeps offline reads working despite storage holding only
+  // REDECRYPT reducer action re-maps these back through decryptPayloadWithKeys
+  // the next time familyKeyRing is populated (see the key-load effect below)
+  // — that's what keeps offline reads working despite storage holding only
   // ciphertext.
   useEffect(() => {
     if (!state.hydrated) return;
@@ -738,46 +819,58 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [state.session?.token]);
 
-  // Phase K — hydrate the E2EE key cache whenever the current family changes
-  // (fresh login into an e2ee family, or create/join within this session).
+  // Phase K/N — hydrate the E2EE keyring cache whenever the current family
+  // changes (fresh login into a family, or create/join within this session).
   // This local storage read usually resolves well before the bootstrap
   // effect's network fetch above, so messages typically decrypt on the very
   // first BOOTSTRAP dispatch. If it doesn't win that race, re-running
-  // bootstrap once here (only when a key was actually found) re-maps
+  // bootstrap once here (only when a ring was actually found) re-maps
   // everything through fromServerMessage now that the cache is populated —
-  // cheap, and only ever happens for e2ee families the user already has the
-  // key for.
+  // cheap, and only ever happens for families the user already holds a key
+  // for. That same re-fetch also carries `keyRolls`, which get fixpoint-
+  // replayed against the loaded ring (see applyKeyRolls) — this is what lets
+  // a member who missed a rotation while offline (or a brand-new member who
+  // joined with only the original invite key) recover every subsequent key
+  // without re-entering anything.
   useEffect(() => {
     const familyId = state.family?.id;
     if (!familyId) {
-      familyKeyCache = null;
+      familyKeyRing = null;
       dispatch({ type: 'SET_HAS_KEY', value: false });
       return;
     }
     let cancelled = false;
     keyStorage
-      .get(familyId)
-      .then((keyB64) => {
+      .getRing(familyId)
+      .then((keys) => {
         if (cancelled) return;
-        if (!keyB64) {
-          familyKeyCache = null;
+        if (!keys || !keys.length) {
+          familyKeyRing = null;
           dispatch({ type: 'SET_HAS_KEY', value: false });
           return;
         }
-        familyKeyCache = { familyId, keyB64 };
+        familyKeyRing = { familyId, keys };
         dispatch({ type: 'SET_HAS_KEY', value: true });
         // Phase L — messages hydrated from storage (persisted as
         // ciphertext-only, see the persist effect above) come back `locked`
-        // regardless of whether we held the key last session. Re-map them
-        // through decryptPayload right away — synchronous, no network — so
-        // offline reads work even if the bootstrap re-fetch below never
-        // completes (no connectivity).
-        dispatch({ type: 'REDECRYPT', keyB64 });
+        // regardless of whether we held the ring last session. Re-map them
+        // through decryptPayloadWithKeys right away — synchronous, no
+        // network — so offline reads work even if the bootstrap re-fetch
+        // below never completes (no connectivity).
+        dispatch({ type: 'REDECRYPT', keys });
         const token = state.session?.token;
         if (token) {
           getBootstrap(token)
             .then((payload) => {
-              if (!cancelled) dispatch({ type: 'BOOTSTRAP', payload });
+              if (cancelled) return;
+              dispatch({ type: 'BOOTSTRAP', payload });
+              // Phase N — replay any rolls this ring hasn't absorbed yet.
+              if (!familyKeyRing || familyKeyRing.familyId !== familyId) return;
+              const grown = applyKeyRolls(familyKeyRing.keys, payload.keyRolls);
+              if (grown === familyKeyRing.keys) return;
+              familyKeyRing = { familyId, keys: grown };
+              keyStorage.setRing(familyId, grown).catch((err) => console.warn('[store] keyring persist failed', err));
+              dispatch({ type: 'REDECRYPT', keys: grown });
             })
             .catch((err) => console.warn('[store] re-bootstrap after key load failed', err));
         }
@@ -785,7 +878,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       .catch((err) => {
         console.warn('[store] key hydration failed', err);
         if (!cancelled) {
-          familyKeyCache = null;
+          familyKeyRing = null;
           dispatch({ type: 'SET_HAS_KEY', value: false });
         }
       });
@@ -822,7 +915,9 @@ export function useActions() {
       // Optimistic local message always stores plaintext (so the sender sees
       // their own text/location immediately) — only the wire body is ever
       // enveloped, and only when the family has e2ee on AND we actually hold
-      // its key (the familyId guard defends against a stale cache entry).
+      // its ring (the familyId guard defends against a stale cache entry).
+      // Encrypts under the ring's ACTIVE key (the last one — see
+      // activeKeyFor) so a rotation immediately takes effect for new sends.
       sendMessage: (groupId: string, text: string) => {
         const authorId = state.session?.userId;
         if (!authorId) return;
@@ -830,7 +925,7 @@ export function useActions() {
         const msg: Message = { id, groupId, authorId, kind: 'text', text, ts: Date.now() };
         dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
         if (!token) return;
-        const key = state.family?.e2ee && familyKeyCache?.familyId === state.family.id ? familyKeyCache.keyB64 : null;
+        const key = state.family?.e2ee ? activeKeyFor(state.family.id) : null;
         const bodyPromise = key ? encryptPayload(key, { text }) : Promise.resolve(text);
         bodyPromise
           .then((body) => postMessage(token, groupId, { id, kind: 'text', body }))
@@ -845,7 +940,7 @@ export function useActions() {
         const msg: Message = { id, groupId, authorId, kind: 'loc', loc, live, ts: Date.now() };
         dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
         if (!token) return;
-        const key = state.family?.e2ee && familyKeyCache?.familyId === state.family.id ? familyKeyCache.keyB64 : null;
+        const key = state.family?.e2ee ? activeKeyFor(state.family.id) : null;
         if (key) {
           // Encrypted loc rides inside the envelope body — the server's `loc`
           // column stays NULL for this message (see chat.js's createMessage).
@@ -1261,39 +1356,39 @@ export function useActions() {
           // Non-fatal — the token may already be expired/gone server-side.
         }
         await tokenStorage.clear().catch(() => {});
-        familyKeyCache = null;
+        familyKeyRing = null;
         dispatch({ type: 'LOGOUT' });
       },
 
       /**
        * Families are born E2EE — the server sets `e2ee: true` on the INSERT
        * itself (no opt-in, no separate enable call). This just generates the
-       * local key and stores it before ever exposing the family to the UI.
-       * Returns the raw key alongside the family so the caller can show/share
-       * the extended invite immediately — it's never retrievable from the
-       * server again.
+       * local key and stores it (as a fresh one-element ring — index 0, the
+       * anchor) before ever exposing the family to the UI. Returns the raw
+       * key alongside the family so the caller can show/share the extended
+       * invite immediately — it's never retrievable from the server again.
        */
       createFamily: async (name: string): Promise<{ family: FamilyState; keyB64: string }> => {
         if (!token) throw new Error('not signed in');
         const info = await apiCreateFamily(token, name);
         const familyId = info.family.id;
         const keyB64 = await generateFamilyKey();
-        await keyStorage.set(familyId, keyB64);
-        familyKeyCache = { familyId, keyB64 };
+        await keyStorage.setRing(familyId, [keyB64]);
+        familyKeyRing = { familyId, keys: [keyB64] };
         dispatch({ type: 'SET_HAS_KEY', value: true });
         const family = toFamilyState(info);
         dispatch({ type: 'SET_FAMILY', family });
         return { family, keyB64 };
       },
 
-      /** `keyB64` comes from parseInvite() when the pasted invite was the extended form (`CODE#K1.<key>`). */
+      /** `keyB64` comes from parseInvite() when the pasted invite was the extended form (`CODE#K1.<key>`) — always the ORIGINAL anchor key, even for a family that's since rotated; the key-load effect's bootstrap replay walks the roll chain to rebuild the rest of the ring. */
       joinFamily: async (code: string, keyB64?: string) => {
         if (!token) throw new Error('not signed in');
         const info = await apiJoinFamily(token, code);
         const family = toFamilyState(info);
         if (keyB64) {
-          await keyStorage.set(family.id, keyB64);
-          familyKeyCache = { familyId: family.id, keyB64 };
+          await keyStorage.setRing(family.id, [keyB64]);
+          familyKeyRing = { familyId: family.id, keys: [keyB64] };
           dispatch({ type: 'SET_HAS_KEY', value: true });
         }
         dispatch({ type: 'SET_FAMILY', family });
@@ -1301,22 +1396,49 @@ export function useActions() {
 
       /**
        * "Enter your family key" flow: accepts either a full extended invite
-       * or a bare pasted key, stores it, then re-runs bootstrap so every
-       * currently-locked message re-maps through fromServerMessage with the
-       * now-populated cache.
+       * or a bare pasted key, stores it as a fresh one-element ring, then
+       * re-runs bootstrap so every currently-locked message re-maps through
+       * fromServerMessage with the now-populated cache (and so any key rolls
+       * since this key was issued get fixpoint-replayed — see the key-load
+       * effect, which this same family-id state also feeds).
        */
       importFamilyKey: async (input: string): Promise<void> => {
         if (!state.family) throw new Error('not in a family');
         const keyB64 = parseKeyInput(input);
         if (!keyB64) throw new Error("That doesn't look like a valid family key");
         const familyId = state.family.id;
-        await keyStorage.set(familyId, keyB64);
-        familyKeyCache = { familyId, keyB64 };
+        await keyStorage.setRing(familyId, [keyB64]);
+        familyKeyRing = { familyId, keys: [keyB64] };
         dispatch({ type: 'SET_HAS_KEY', value: true });
         if (token) {
           const payload = await getBootstrap(token);
           dispatch({ type: 'BOOTSTRAP', payload });
         }
+      },
+
+      /**
+       * Owner-only key rotation (enforced in the UI — see YouScreen.tsx —
+       * not here; the server doesn't care who calls this either, since every
+       * current member already holds the full key history regardless). Wraps
+       * a freshly generated key under the current active key, posts it, then
+       * appends it locally — the new key becomes active immediately for this
+       * device's own outgoing messages. Other members pick it up via the WS
+       * `keyroll` broadcast (applyIncomingKeyRoll) or, if offline, the next
+       * bootstrap's fixpoint replay.
+       */
+      rotateKey: async (): Promise<void> => {
+        if (!token || !state.family) throw new Error('not signed in');
+        const familyId = state.family.id;
+        if (!familyKeyRing || familyKeyRing.familyId !== familyId || !familyKeyRing.keys.length) {
+          throw new Error("This device doesn't hold the family key yet");
+        }
+        const prevActive = familyKeyRing.keys[familyKeyRing.keys.length - 1];
+        const newKey = await generateFamilyKey();
+        const wrapped = await wrapKey(prevActive, newKey);
+        await postKeyRoll(token, familyId, wrapped);
+        const keys = [...familyKeyRing.keys, newKey];
+        familyKeyRing = { familyId, keys };
+        await keyStorage.setRing(familyId, keys);
       },
     }),
     [dispatch, token, state.session, state.family, state.messages, state.grocery, state.tasks, state.events, state.albums],
