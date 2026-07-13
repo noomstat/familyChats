@@ -5,6 +5,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
 import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
+import { DatePickerCalendar } from '../components/DatePickerCalendar';
 import { useActions, useFamily, useTasks } from '../store';
 import type { FamilyMember, ServerTask, TaskRecurrence } from '../api/client';
 import type { FamilyStackParamList } from '../navigation/types';
@@ -227,7 +228,11 @@ function AddTaskSheet({ members, onClose }: { members: FamilyMember[]; onClose: 
   const [assigneeId, setAssigneeId] = useState<string | undefined>(undefined);
   const [dueDate, setDueDate] = useState<string | null>(null);
   const [recurrence, setRecurrence] = useState<TaskRecurrence | null>(null);
+  const [showCal, setShowCal] = useState(false);
   const dueOptions = useMemo(buildDueOptions, []);
+  // A calendar-picked date won't match any quick chip — surface it on the
+  // "Pick a date" chip instead so the choice is still visible.
+  const isCustomDue = dueDate !== null && !dueOptions.some((o) => o.value === dueDate);
 
   const submit = () => {
     if (!title.trim()) return;
@@ -278,11 +283,19 @@ function AddTaskSheet({ members, onClose }: { members: FamilyMember[]; onClose: 
         <Field label="Due">
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {dueOptions.map((opt) => (
-              <Chip key={opt.label} selected={dueDate === opt.value} onPress={() => setDueDate(opt.value)}>
+              <Chip key={opt.label} selected={dueDate === opt.value} onPress={() => { setDueDate(opt.value); setShowCal(false); }}>
                 {opt.label}
               </Chip>
             ))}
+            <Chip selected={isCustomDue || showCal} onPress={() => setShowCal((v) => !v)}>
+              {isCustomDue ? dueDate : 'Pick a date…'}
+            </Chip>
           </View>
+          {showCal && (
+            <View style={{ marginTop: 10, padding: 10, borderRadius: radius.lg, backgroundColor: semantic.surfacePage, borderWidth: 1, borderColor: semantic.borderSubtle }}>
+              <DatePickerCalendar value={dueDate} onChange={(d) => { setDueDate(d); setShowCal(false); }} />
+            </View>
+          )}
         </Field>
 
         <Field label="Repeats">
