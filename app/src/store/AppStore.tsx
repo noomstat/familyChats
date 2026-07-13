@@ -3,12 +3,14 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import {
+  CATEGORIES,
+  CategoryMeta,
   FinanceSummary,
   LiveShare,
   Message,
   Note,
-  categoryMeta,
   monthKey,
+  resolveCategory,
   summarizeFinance,
   timeLabel,
 } from './model';
@@ -17,13 +19,13 @@ import { keyStorage } from './keyStorage';
 import { decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput, unwrapKey, wrapKey } from '../crypto/e2ee';
 import {
   BootstrapResponse,
-  CategoryId,
   EventPatch,
   FamilyInfo,
   FamilyMember,
   KeyRoll,
   ServerAlbum,
   ServerBudget,
+  ServerCategory,
   ServerEvent,
   ServerExpense,
   ServerGroup,
@@ -39,6 +41,7 @@ import {
   authLogin,
   authLogout,
   authRegister,
+  addCategory as apiAddCategory,
   addEventItem,
   addExpense as apiAddExpense,
   addGroupMember,
@@ -61,6 +64,7 @@ import {
   putBudget as apiPutBudget,
   remindPayment as apiRemindPayment,
   removeAlbumItem,
+  removeCategory as apiRemoveCategory,
   removeEventItem,
   removeExpense as apiRemoveExpense,
   removeGroupMember,
@@ -137,6 +141,8 @@ export interface AppState {
   finExpenses: ServerExpense[];
   finTransfers: ServerTransfer[];
   budget: ServerBudget | null;
+  /** Phase R — family's custom expense categories, unsorted — see useCategories() for the built-ins-merged, display-ready list. */
+  categories: ServerCategory[];
   /** Server-backed shared grocery list, unsorted — see useGrocery() for display order. */
   grocery: ServerGroceryItem[];
   /** Server-backed shared tasks, unsorted — see useTasks() for display order. */
@@ -181,6 +187,7 @@ const seedState: AppState = {
   finExpenses: [],
   finTransfers: [],
   budget: null,
+  categories: [],
   grocery: [],
   tasks: [],
   events: [],
@@ -343,6 +350,9 @@ type Action =
   | { type: 'EXPENSE_REMOVE'; id: string }
   | { type: 'TRANSFER_UPSERT'; transfer: ServerTransfer }
   | { type: 'BUDGET_UPSERT'; budget: ServerBudget }
+  | { type: 'CATEGORY_SET'; categories: ServerCategory[] }
+  | { type: 'CATEGORY_UPSERT'; category: ServerCategory }
+  | { type: 'CATEGORY_REMOVE'; id: string }
   | { type: 'GROCERY_SET'; grocery: ServerGroceryItem[] }
   | { type: 'GROCERY_UPSERT'; item: ServerGroceryItem }
   | { type: 'GROCERY_REMOVE'; id: string }
@@ -433,6 +443,7 @@ function reducer(state: AppState, action: Action): AppState {
         finExpenses: action.payload.expenses,
         finTransfers: action.payload.transfers,
         budget: action.payload.budget,
+        categories: action.payload.categories,
         lastSync: action.payload.serverTime,
       };
     }
@@ -598,6 +609,20 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'BUDGET_UPSERT':
       return { ...state, budget: action.budget };
+
+    case 'CATEGORY_SET':
+      return { ...state, categories: action.categories };
+
+    case 'CATEGORY_UPSERT': {
+      const idx = state.categories.findIndex((c) => c.id === action.category.id);
+      const categories = idx >= 0
+        ? state.categories.map((c, i) => (i === idx ? action.category : c))
+        : [...state.categories, action.category];
+      return { ...state, categories };
+    }
+
+    case 'CATEGORY_REMOVE':
+      return { ...state, categories: state.categories.filter((c) => c.id !== action.id) };
 
     case 'GROCERY_SET':
       return { ...state, grocery: action.grocery };
@@ -1109,7 +1134,8 @@ export function useActions() {
 
       addExpense: (input: {
         label: string;
-        categoryId: CategoryId;
+        /** A built-in CategoryId or a custom expense_categories.id (Phase R). */
+        categoryId: string;
         amount: number;
         paidBy: string;
         splitAmong: string[];
@@ -1176,6 +1202,22 @@ export function useActions() {
       uploadReceipt: async (image: UploadFile): Promise<{ receiptPath: string }> => {
         if (!token) throw new Error('not signed in');
         return apiUploadReceipt(token, image);
+      },
+
+      // ── Custom expense categories (Phase R) ───────────────────
+
+      /** Adds a family-scoped custom expense category on top of the 5 built-ins. Not optimistic (the id must survive a built-in/uniqueness check server-side) — resolves once the server confirms, and CATEGORY_UPSERT lands again via the `category` WS broadcast for other members. */
+      addCategory: async (input: { label: string; icon: string; color: string; income?: boolean }): Promise<ServerCategory> => {
+        if (!token) throw new Error('not signed in');
+        const id = uid();
+        const { category } = await apiAddCategory(token, { id, label: input.label, icon: input.icon, color: input.color, income: input.income });
+        dispatch({ type: 'CATEGORY_UPSERT', category });
+        return category;
+      },
+
+      removeCategory: (id: string) => {
+        dispatch({ type: 'CATEGORY_REMOVE', id });
+        if (token) apiRemoveCategory(token, id).catch((err) => console.warn('[store] removeCategory failed', err));
       },
 
       // ── Shared Grocery List ──────────────────────────────────
@@ -1687,17 +1729,23 @@ export function useFinance(): FinanceState {
   const { state } = useCtx();
   const memberIds = useMemo(() => state.family?.members.map((m) => m.id) ?? [], [state.family]);
   const summary = useMemo(
-    () => summarizeFinance(state.finExpenses, state.finTransfers, memberIds),
-    [state.finExpenses, state.finTransfers, memberIds],
+    () => summarizeFinance(state.finExpenses, state.finTransfers, memberIds, state.categories),
+    [state.finExpenses, state.finTransfers, memberIds, state.categories],
   );
   const spent = useMemo(() => {
     const month = monthKey();
     return state.finExpenses
-      .filter((e) => !categoryMeta(e.categoryId).income && monthKey(new Date(e.ts)) === month)
+      .filter((e) => !resolveCategory(e.categoryId, state.categories).income && monthKey(new Date(e.ts)) === month)
       .reduce((s, e) => s + e.amount, 0);
-  }, [state.finExpenses]);
+  }, [state.finExpenses, state.categories]);
   const remaining = (state.budget?.amount ?? 0) - spent;
   return { expenses: state.finExpenses, transfers: state.finTransfers, budget: state.budget, summary, spent, remaining };
+}
+
+/** The 5 built-in categories merged with the family's server-backed custom ones — the full display-ready set for category pickers/lookups (see FinanceScreen). Built-ins first, then custom in creation order. */
+export function useCategories(): CategoryMeta[] {
+  const { state } = useCtx();
+  return useMemo(() => [...CATEGORIES, ...state.categories], [state.categories]);
 }
 
 export function useHydrated(): boolean {

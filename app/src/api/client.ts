@@ -175,6 +175,8 @@ export interface BootstrapResponse {
   transfers: ServerTransfer[];
   /** The family's current-month budget, or null if never set. */
   budget: ServerBudget | null;
+  /** Phase R — family's custom expense categories, full current list (family-scale, like grocery/tasks/events). The 5 built-ins are client-side constants and never ride here. */
+  categories: ServerCategory[];
   /** Phase N — every key roll this family has produced, oldest first. A cold client fixpoint-replays these from its anchor key to rebuild the full ring (see AppStore.tsx's key-load effect). */
   keyRolls: KeyRoll[];
   /** Phase P — E2EE shared notes, full current list (family-scale, like grocery/tasks/events). */
@@ -196,6 +198,8 @@ export interface SyncResponse {
   expenses: ServerExpense[];
   transfers: ServerTransfer[];
   budget: ServerBudget | null;
+  /** Full current list, like grocery/tasks/events. */
+  categories: ServerCategory[];
   /** Full current list, like grocery/tasks/events. */
   notes: ServerNote[];
   serverTime: string;
@@ -545,13 +549,15 @@ export function removePhotoItem(token: string, id: string) {
 
 // ── Family Finance (Phase I) ──────────────────────────────────
 
+/** The 5 always-available built-in category ids — kept for call sites that only ever offer these (e.g. a bare default). An expense's actual `categoryId` is a plain string since Phase R also allows a family's custom (server) category ids. */
 export type CategoryId = 'food' | 'stay' | 'trans' | 'gear' | 'refund';
 
 export interface ServerExpense {
   id: string;
   familyId: string;
   label: string;
-  categoryId: CategoryId;
+  /** A built-in CategoryId or a custom expense_categories.id (Phase R). */
+  categoryId: string;
   amount: number;
   paidBy: string;
   /** User ids. */
@@ -583,9 +589,28 @@ export interface UploadReceiptResponse {
   receiptPath: string;
 }
 
+/**
+ * Phase R — a family's custom expense category, layered on top of the 5
+ * client-side built-ins (see CATEGORIES in store/model.ts). Server-blind
+ * beyond shape validation — `income` decides which side of the Finance
+ * ledger (spend vs income) an expense using this category counts toward.
+ */
+export interface ServerCategory {
+  id: string;
+  familyId: string;
+  label: string;
+  icon: string;
+  /** '#RRGGBB'. */
+  color: string;
+  income: boolean;
+  createdBy: string | null;
+  /** ISO 8601 timestamp. */
+  ts: string;
+}
+
 export function addExpense(
   token: string,
-  input: { id: string; label: string; categoryId: CategoryId; amount: number; paidBy: string; splitAmong: string[]; receiptPath?: string },
+  input: { id: string; label: string; categoryId: string; amount: number; paidBy: string; splitAmong: string[]; receiptPath?: string },
 ) {
   return api<{ expense: ServerExpense }>('/expenses', { method: 'POST', body: input, token });
 }
@@ -609,6 +634,23 @@ export function remindPayment(token: string, input: { toUserId: string; amount: 
 /** Multipart upload of a receipt photo — stores it and returns its path for manual expense entry. */
 export function uploadReceipt(token: string, file: UploadFile) {
   return uploadFile<UploadReceiptResponse>(token, '/finance/scan-receipt', file);
+}
+
+// ── Custom expense categories (Phase R) ───────────────────────
+
+export function getCategories(token: string) {
+  return api<{ categories: ServerCategory[] }>('/categories', { token });
+}
+
+export function addCategory(
+  token: string,
+  input: { id: string; label: string; icon: string; color: string; income?: boolean },
+) {
+  return api<{ category: ServerCategory }>('/categories', { method: 'POST', body: input, token });
+}
+
+export function removeCategory(token: string, id: string) {
+  return api<{ id: string }>(`/categories/${id}`, { method: 'DELETE', token });
 }
 
 // ── Voice messages (Phase F) ─────────────────────────────────

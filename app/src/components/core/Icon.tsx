@@ -58,6 +58,16 @@ import {
   RefreshCw,
   StickyNote,
   Repeat,
+  Tag,
+  Gift,
+  Fuel,
+  Heart,
+  Plane,
+  Coffee,
+  Gamepad2,
+  GraduationCap,
+  Stethoscope,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -124,6 +134,19 @@ const REGISTRY: Record<string, LucideIcon> = {
   'refresh-cw': RefreshCw,
   'sticky-note': StickyNote,
   repeat: Repeat,
+  // Phase R — 'tag' is the resolveCategory() fallback icon (model.ts's
+  // FALLBACK_CATEGORY); the rest is the curated set offered when a family
+  // adds a custom expense category (see FinanceScreen's AddCategorySheet).
+  tag: Tag,
+  gift: Gift,
+  fuel: Fuel,
+  heart: Heart,
+  plane: Plane,
+  coffee: Coffee,
+  'gamepad-2': Gamepad2,
+  'graduation-cap': GraduationCap,
+  stethoscope: Stethoscope,
+  wrench: Wrench,
 };
 
 export type IconName = keyof typeof REGISTRY;

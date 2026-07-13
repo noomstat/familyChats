@@ -93,10 +93,12 @@ export function timeLabel(ts: number): string {
 // user ids, resolved to display names at render time via family members
 // (same pattern as ThreadScreen's `nameOf`).
 
+/** The 5 always-available built-in category ids. Families can add more on top (see ServerCategory in api/client.ts) — an expense's `categoryId` is a plain string that may be one of these OR a custom (server) category's id. */
 export type CategoryId = 'food' | 'stay' | 'trans' | 'gear' | 'refund';
 
 export interface CategoryMeta {
-  id: CategoryId;
+  /** A built-in id, a custom (server) category id, or the resolveCategory() fallback's synthetic id. */
+  id: string;
   label: string;
   icon: string;
   color: string;
@@ -112,8 +114,23 @@ export const CATEGORIES: CategoryMeta[] = [
   { id: 'refund', label: 'Refunds & paid back', icon: 'corner-down-left', color: '#12B76A', income: true },
 ];
 
+/** Built-in-only lookup (throws via `!` for an unknown id) — safe wherever `id` is statically known to be one of the 5 built-ins. Prefer resolveCategory() for any id that could be a custom category or a deleted one. */
 export const categoryMeta = (id: CategoryId) => CATEGORIES.find((c) => c.id === id)!;
 export const SPEND_CATEGORIES = CATEGORIES.filter((c) => !c.income);
+
+/** Neutral fallback for an expense's categoryId that resolves to neither a built-in nor a currently-known custom category — e.g. a custom category that's since been deleted (deletion doesn't rewrite past expenses; see finance.js's removeCategory). */
+export const FALLBACK_CATEGORY: CategoryMeta = { id: 'other', label: 'Other', icon: 'tag', color: '#9AA5B1', income: false };
+
+/**
+ * Resolve any category id (built-in or custom) against the merged set: the 5
+ * built-ins always win first, then `custom` (a family's server-backed
+ * expense_categories — pass useCategories()'s custom slice, or the merged
+ * list itself, either works since built-ins are checked first regardless),
+ * falling back to a neutral "Other" for an unknown/deleted id.
+ */
+export function resolveCategory(id: string, custom: CategoryMeta[] = []): CategoryMeta {
+  return CATEGORIES.find((c) => c.id === id) ?? custom.find((c) => c.id === id) ?? FALLBACK_CATEGORY;
+}
 
 /** Thai Baht formatter — `฿35,000` (thousands-separated, no decimals when whole, else 2dp). */
 export function thb(n: number): string {
@@ -132,7 +149,7 @@ export function monthKey(date: Date = new Date()): string {
 }
 
 export interface FinCategoryTotal {
-  id: CategoryId;
+  id: string;
   label: string;
   icon: string;
   color: string;
@@ -147,6 +164,23 @@ export interface FinPersonBalance {
   net: number;
 }
 
+/** Phase R — one family member's income vs expense totals (see FinanceSummary.memberBreakdown). */
+export interface FinMemberBreakdown {
+  userId: string;
+  /** Their share of spend-category expenses: sum over expenses where they're in splitAmong, amount/splitAmong.length. Shares across all members sum to `familyBreakdown.expense`. */
+  expense: number;
+  /** Income-category amounts they paid (paidBy). Sums across all members to `familyBreakdown.income`. */
+  income: number;
+}
+
+/** Phase R — the whole family's aggregate income vs expense (see FinanceSummary.familyBreakdown). */
+export interface FinFamilyBreakdown {
+  /** Total of all spend-category expenses — equals the sum of every member's `expense` share. */
+  expense: number;
+  /** Total of all income-category expenses — equals the sum of every member's `income`. */
+  income: number;
+}
+
 export interface FinanceSummary {
   spendByCategory: FinCategoryTotal[];
   income: { label: string; icon: string; amount: number };
@@ -154,6 +188,10 @@ export interface FinanceSummary {
   incomeTotal: number;
   /** Sorted by net descending (biggest creditor first, biggest debtor last). */
   people: FinPersonBalance[];
+  /** Phase R — per-member income vs expense, one row per member (same membership rule as `people`). */
+  memberBreakdown: FinMemberBreakdown[];
+  /** Phase R — the family-wide aggregate (== expenseTotal/incomeTotal, named for the Breakdown UI). */
+  familyBreakdown: FinFamilyBreakdown;
 }
 
 /**
@@ -161,18 +199,39 @@ export interface FinanceSummary {
  * balances. Id-keyed port of the old (pre-Phase-I) display-name-keyed
  * `summarize()` — `memberIds` ensures every current family member gets a row
  * even if they've never paid or split anything yet.
+ *
+ * `customCategories` is a family's server-backed custom categories (just the
+ * custom ones — resolveCategory() already checks the 5 built-ins first
+ * regardless of what's passed here), used to resolve each expense's
+ * categoryId to its label/icon/color/income-ness. An expense whose category
+ * was since deleted (or belongs to neither list) falls back to a neutral
+ * "Other" bucket via resolveCategory — it still counts toward totals, just
+ * displayed generically.
  */
-export function summarizeFinance(expenses: ServerExpense[], transfers: ServerTransfer[], memberIds: string[]): FinanceSummary {
-  const spend = expenses.filter((e) => !categoryMeta(e.categoryId).income);
-  const refunds = expenses.filter((e) => categoryMeta(e.categoryId).income);
+export function summarizeFinance(
+  expenses: ServerExpense[],
+  transfers: ServerTransfer[],
+  memberIds: string[],
+  customCategories: CategoryMeta[] = [],
+): FinanceSummary {
+  const catOf = (id: string) => resolveCategory(id, customCategories);
+  const spend = expenses.filter((e) => !catOf(e.categoryId).income);
+  const refunds = expenses.filter((e) => catOf(e.categoryId).income);
 
-  const spendByCategory: FinCategoryTotal[] = SPEND_CATEGORIES.map((c) => ({
-    id: c.id,
-    label: c.label,
-    icon: c.icon,
-    color: c.color,
-    amount: spend.filter((e) => e.categoryId === c.id).reduce((s, e) => s + e.amount, 0),
-  })).filter((c) => c.amount > 0);
+  const spendCatIds = [...new Set(spend.map((e) => e.categoryId))];
+  const spendByCategory: FinCategoryTotal[] = spendCatIds
+    .map((id) => {
+      const meta = catOf(id);
+      return {
+        id,
+        label: meta.label,
+        icon: meta.icon,
+        color: meta.color,
+        amount: spend.filter((e) => e.categoryId === id).reduce((s, e) => s + e.amount, 0),
+      };
+    })
+    .filter((c) => c.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
 
   const expenseTotal = spend.reduce((s, e) => s + e.amount, 0);
   const incomeTotal = refunds.reduce((s, e) => s + e.amount, 0);
@@ -196,12 +255,23 @@ export function summarizeFinance(expenses: ServerExpense[], transfers: ServerTra
   });
   people.sort((a, b) => b.net - a.net);
 
-  const refundMeta = categoryMeta('refund');
+  const memberBreakdown: FinMemberBreakdown[] = [...ids].map((userId) => ({
+    userId,
+    expense: spend
+      .filter((e) => e.splitAmong.includes(userId))
+      .reduce((s, e) => s + e.amount / e.splitAmong.length, 0),
+    income: refunds.filter((e) => e.paidBy === userId).reduce((s, e) => s + e.amount, 0),
+  }));
+
+  const familyBreakdown: FinFamilyBreakdown = { expense: expenseTotal, income: incomeTotal };
+
   return {
     spendByCategory,
-    income: { label: refundMeta.label, icon: refundMeta.icon, amount: incomeTotal },
+    income: { label: 'Income', icon: 'corner-down-left', amount: incomeTotal },
     expenseTotal,
     incomeTotal,
     people,
+    memberBreakdown,
+    familyBreakdown,
   };
 }

@@ -53,6 +53,7 @@ export function useRealtime(): void {
           dispatch({ type: 'NOTE_SET', notes: data.notes.map(fromServerNote) });
           dispatch({ type: 'ALBUM_SET', albums: data.albums });
           dispatch({ type: 'FIN_SET', expenses: data.expenses, transfers: data.transfers, budget: data.budget });
+          dispatch({ type: 'CATEGORY_SET', categories: data.categories });
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
         } else {
           const data = await getBootstrap(session.token);
@@ -155,6 +156,10 @@ export function useRealtime(): void {
             break;
           case 'budget':
             if (data.action === 'upsert') dispatch({ type: 'BUDGET_UPSERT', budget: data.budget });
+            break;
+          case 'category':
+            if (data.action === 'upsert') dispatch({ type: 'CATEGORY_UPSERT', category: data.category });
+            else if (data.action === 'remove') dispatch({ type: 'CATEGORY_REMOVE', id: data.id });
             break;
           default:
             break; // 'hello' and any future event types we don't handle yet

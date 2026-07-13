@@ -13,6 +13,7 @@ export {
   useHasMore,
   useLastSync,
   useFinance,
+  useCategories,
   useHydrated,
   useSession,
   useFamily,

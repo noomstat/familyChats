@@ -4,15 +4,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
-import { Button, Icon, IconButton, Input, Chip } from '../components/core';
+import { Button, Icon, IconButton, Input, Chip, Switch } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import {
-  CATEGORIES,
-  CategoryId,
+  CategoryMeta,
   FinCategoryTotal,
+  FinFamilyBreakdown,
+  FinMemberBreakdown,
   FinPersonBalance,
+  resolveCategory,
   thb,
   useActions,
+  useCategories,
   useFamily,
   useFinance,
   useSession,
@@ -23,12 +26,17 @@ import type { FamilyStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'Finance'>;
 
-type ViewMode = 'category' | 'people';
+type ViewMode = 'category' | 'people' | 'breakdown';
+
+/** Curated palette + icon set offered when a family adds a custom expense category (see AddCategorySheet). */
+const CATEGORY_COLORS = ['#FF5A3C', '#FF7657', '#F5A623', '#2E72E8', '#12B76A', '#9B51E0', '#E0507A', '#0BA5A5', '#6B7280', '#D97706'];
+const CATEGORY_ICONS = ['tag', 'gift', 'fuel', 'heart', 'plane', 'coffee', 'gamepad-2', 'graduation-cap', 'stethoscope', 'wrench'];
 
 export function FinanceScreen({ navigation }: Props) {
   const family = useFamily();
   const session = useSession();
   const finance = useFinance();
+  const categories = useCategories();
   const actions = useActions();
   const [view, setView] = useState<ViewMode>('category');
   const [adding, setAdding] = useState(false);
@@ -96,24 +104,29 @@ export function FinanceScreen({ navigation }: Props) {
         </Pressable>
 
         <View style={{ marginTop: 14 }}>
-          <Segmented value={view} onChange={setView} options={[['category', 'By category'], ['people', 'By people']]} />
+          <Segmented
+            value={view}
+            onChange={setView}
+            options={[['category', 'By category'], ['people', 'By people'], ['breakdown', 'Breakdown']]}
+          />
         </View>
 
         <View style={{ marginTop: 14 }}>
-          {view === 'category' ? (
+          {view === 'category' && (
             <>
               <ByCategory summary={finance.summary} />
               <RecentExpenses
                 expenses={recent}
+                categories={categories}
                 nameOf={nameOf}
                 confirmingId={confirmingId}
                 onDelete={removeWithConfirm}
                 onPreview={setPreviewUri}
               />
             </>
-          ) : (
-            <ByPeople summary={finance.summary} me={session?.userId} nameOf={nameOf} actions={actions} />
           )}
+          {view === 'people' && <ByPeople summary={finance.summary} me={session?.userId} nameOf={nameOf} actions={actions} />}
+          {view === 'breakdown' && <Breakdown summary={finance.summary} members={members} me={session?.userId} nameOf={nameOf} />}
         </View>
       </ScrollView>
 
@@ -134,7 +147,7 @@ export function FinanceScreen({ navigation }: Props) {
         </Button>
       </View>
 
-      {adding && <AddExpenseSheet members={members} me={session?.userId} onClose={() => setAdding(false)} />}
+      {adding && <AddExpenseSheet members={members} me={session?.userId} categories={categories} onClose={() => setAdding(false)} />}
       {settingBudget && <SetBudgetSheet current={finance.budget?.amount} onClose={() => setSettingBudget(false)} />}
       {!!previewUri && <ReceiptPreview uri={previewUri} onClose={() => setPreviewUri(null)} />}
     </SafeAreaView>
@@ -226,12 +239,14 @@ function ByCategory({ summary }: { summary: { spendByCategory: FinCategoryTotal[
 
 function RecentExpenses({
   expenses,
+  categories,
   nameOf,
   confirmingId,
   onDelete,
   onPreview,
 }: {
   expenses: ServerExpense[];
+  categories: CategoryMeta[];
   nameOf: (id: string) => string;
   confirmingId: string | null;
   onDelete: (id: string) => void;
@@ -242,7 +257,7 @@ function RecentExpenses({
     <View style={{ marginTop: 18, gap: 4 }}>
       <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 12, color: semantic.textFaint, marginHorizontal: 4, marginBottom: 4 }}>Recent</Text>
       {expenses.map((e) => {
-        const meta = CATEGORIES.find((c) => c.id === e.categoryId)!;
+        const meta = resolveCategory(e.categoryId, categories);
         const confirming = confirmingId === e.id;
         return (
           <Pressable
@@ -330,6 +345,92 @@ function ByPeople({
   );
 }
 
+// ── Breakdown (Phase R) — per-member + family income vs expense ─
+
+type BreakdownMode = 'member' | 'family';
+
+function Breakdown({
+  summary,
+  members,
+  me,
+  nameOf,
+}: {
+  summary: { memberBreakdown: FinMemberBreakdown[]; familyBreakdown: FinFamilyBreakdown };
+  members: FamilyMember[];
+  me?: string;
+  nameOf: (id: string) => string;
+}) {
+  const [mode, setMode] = useState<BreakdownMode>('member');
+  return (
+    <View style={{ gap: 14 }}>
+      <View style={{ flexDirection: 'row', gap: 4, backgroundColor: semantic.surfaceSunk, borderRadius: radius.full, padding: 4 }}>
+        {(
+          [
+            ['member', 'By member'],
+            ['family', 'Family'],
+          ] as [BreakdownMode, string][]
+        ).map(([id, label]) => {
+          const on = mode === id;
+          return (
+            <Pressable
+              key={id}
+              onPress={() => setMode(id)}
+              style={{
+                flex: 1,
+                height: 32,
+                borderRadius: radius.full,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: on ? semantic.surfaceCard : 'transparent',
+                ...(on ? shadow.sm : {}),
+              }}
+            >
+              <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: on ? semantic.textStrong : semantic.textMuted }}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {mode === 'member' ? (
+        <View style={{ gap: 8 }}>
+          {summary.memberBreakdown.length === 0 && (
+            <Text style={{ textAlign: 'center', color: semantic.textFaint, paddingVertical: 24, fontSize: fontSize.bodySm }}>No expenses yet.</Text>
+          )}
+          {summary.memberBreakdown.map((m) => (
+            <View
+              key={m.userId}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4 }}
+            >
+              <Avatar name={nameOf(m.userId)} size={42} ring={m.userId === me} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{nameOf(m.userId)}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 14, color: colors.coral600 }}>-{thb(m.expense)}</Text>
+                {m.income > 0 && <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: colors.ping700 }}>+{thb(m.income)}</Text>}
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <View style={{ backgroundColor: semantic.surfaceSunk, borderRadius: radius.lg, padding: 16, gap: 12 }}>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <View style={{ flex: 1, backgroundColor: semantic.surfaceCard, borderRadius: radius.md, padding: 12 }}>
+              <Text style={{ fontSize: 11, color: semantic.textMuted }}>Expense</Text>
+              <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 20, color: colors.coral600, marginTop: 2 }}>{thb(summary.familyBreakdown.expense)}</Text>
+            </View>
+            <View style={{ flex: 1, backgroundColor: semantic.surfaceCard, borderRadius: radius.md, padding: 12 }}>
+              <Text style={{ fontSize: 11, color: semantic.textMuted }}>Income</Text>
+              <Text style={{ fontFamily: fontFamily.monoBold, fontSize: 20, color: colors.ping700, marginTop: 2 }}>{thb(summary.familyBreakdown.income)}</Text>
+            </View>
+          </View>
+          <Text style={{ fontSize: 12, color: semantic.textFaint }}>{members.length} people in {`this family's`} ledger.</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 function RemindButton({ onRemind }: { onRemind: () => Promise<void> }) {
   const [state, setState] = useState<'idle' | 'sending' | 'done'>('idle');
   const press = async () => {
@@ -352,17 +453,28 @@ function RemindButton({ onRemind }: { onRemind: () => Promise<void> }) {
 
 // ── Add-expense form ─────────────────────────────────────────
 
-function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me: string | undefined; onClose: () => void }) {
+function AddExpenseSheet({
+  members,
+  me,
+  categories,
+  onClose,
+}: {
+  members: FamilyMember[];
+  me: string | undefined;
+  categories: CategoryMeta[];
+  onClose: () => void;
+}) {
   const actions = useActions();
   const [label, setLabel] = useState('');
   const [amountStr, setAmountStr] = useState('');
-  const [categoryId, setCategoryId] = useState<CategoryId>('food');
+  const [categoryId, setCategoryId] = useState<string>('food');
   const [paidBy, setPaidBy] = useState(me ?? members[0]?.id ?? '');
   const [split, setSplit] = useState<string[]>(members.map((m) => m.id));
   const [receiptPath, setReceiptPath] = useState<string | undefined>(undefined);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [attaching, setAttaching] = useState(false);
   const [attachHint, setAttachHint] = useState<string | null>(null);
+  const [addingCategory, setAddingCategory] = useState(false);
 
   const amount = parseFloat(amountStr.replace(',', '.'));
   const valid = label.trim().length > 0 && amount > 0 && split.length > 0 && !!paidBy;
@@ -459,7 +571,7 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
 
         <Field label="Category">
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {CATEGORIES.map((c) => (
+            {categories.map((c) => (
               <Chip
                 key={c.id}
                 selected={categoryId === c.id}
@@ -470,6 +582,9 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
                 {c.label}
               </Chip>
             ))}
+            <Chip onPress={() => setAddingCategory(true)} leading={<Icon name="plus" size={15} color={semantic.textMuted} />}>
+              Add category
+            </Chip>
           </View>
         </Field>
 
@@ -510,6 +625,129 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
           Add {amount > 0 ? thb(Math.round(amount * 100) / 100) : 'expense'}
         </Button>
       </ScrollView>
+
+      {addingCategory && (
+        <AddCategorySheet
+          onClose={() => setAddingCategory(false)}
+          onCreated={(id) => {
+            setCategoryId(id);
+            setAddingCategory(false);
+          }}
+        />
+      )}
+    </KeyboardAvoidingView>
+  );
+}
+
+// ── Add-category form (Phase R) ──────────────────────────────
+
+function AddCategorySheet({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const actions = useActions();
+  const [label, setLabel] = useState('');
+  const [color, setColor] = useState(CATEGORY_COLORS[0]);
+  const [icon, setIcon] = useState(CATEGORY_ICONS[0]);
+  const [income, setIncome] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+
+  const valid = label.trim().length > 0;
+
+  const submit = async () => {
+    if (!valid || saving) return;
+    setSaving(true);
+    setHint(null);
+    try {
+      const category = await actions.addCategory({ label: label.trim(), icon, color, income });
+      onCreated(category.id);
+    } catch (err) {
+      setHint(err instanceof Error ? err.message : 'Could not add the category.');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}
+    >
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <View
+        style={{
+          backgroundColor: semantic.surfaceCard,
+          borderTopLeftRadius: 28,
+          borderTopRightRadius: 28,
+          paddingHorizontal: 20,
+          paddingTop: 10,
+          paddingBottom: 28,
+          gap: 16,
+          ...shadow.xl,
+        }}
+      >
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
+        <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Add category</Text>
+
+        <Field label="Name">
+          <Input value={label} onChangeText={setLabel} placeholder="e.g. Pets" />
+        </Field>
+
+        <Field label="Color">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            {CATEGORY_COLORS.map((c) => (
+              <Pressable
+                key={c}
+                onPress={() => setColor(c)}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: c,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: color === c ? 3 : 0,
+                  borderColor: semantic.textStrong,
+                }}
+              >
+                {color === c && <Icon name="check" size={14} color={colors.white} />}
+              </Pressable>
+            ))}
+          </View>
+        </Field>
+
+        <Field label="Icon">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {CATEGORY_ICONS.map((i) => (
+              <Pressable
+                key={i}
+                onPress={() => setIcon(i)}
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: radius.full,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: icon === i ? color : semantic.surfaceSunk,
+                }}
+              >
+                <Icon name={i} size={17} color={icon === i ? colors.white : semantic.textMuted} />
+              </Pressable>
+            ))}
+          </View>
+        </Field>
+
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View>
+            <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 14, color: semantic.textStrong }}>Income category</Text>
+            <Text style={{ fontSize: 12, color: semantic.textMuted }}>Money coming back, like refunds.</Text>
+          </View>
+          <Switch checked={income} onChange={setIncome} />
+        </View>
+
+        {!!hint && <Text style={{ fontSize: 12, color: semantic.danger }}>{hint}</Text>}
+
+        <Button block size="lg" disabled={!valid || saving} onPress={submit}>
+          {saving ? 'Adding…' : 'Add category'}
+        </Button>
+      </View>
     </KeyboardAvoidingView>
   );
 }
