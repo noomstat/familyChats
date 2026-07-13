@@ -6,8 +6,14 @@ import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme
 import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { useActions, useFamily, useTasks } from '../store';
-import type { FamilyMember, ServerTask } from '../api/client';
+import type { FamilyMember, ServerTask, TaskRecurrence } from '../api/client';
 import type { FamilyStackParamList } from '../navigation/types';
+
+const RECURRENCE_OPTIONS: { label: string; value: TaskRecurrence | null }[] = [
+  { label: 'None', value: null },
+  { label: 'Weekly', value: 'weekly' },
+  { label: 'Monthly', value: 'monthly' },
+];
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'Tasks'>;
 
@@ -190,16 +196,19 @@ function TaskRow({
       </Pressable>
 
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text
-          style={{
-            fontFamily: fontFamily.bodyMedium,
-            fontSize: 15,
-            color: task.done ? semantic.textFaint : semantic.textStrong,
-            textDecorationLine: task.done ? 'line-through' : 'none',
-          }}
-        >
-          {task.title}
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <Text
+            style={{
+              fontFamily: fontFamily.bodyMedium,
+              fontSize: 15,
+              color: task.done ? semantic.textFaint : semantic.textStrong,
+              textDecorationLine: task.done ? 'line-through' : 'none',
+            }}
+          >
+            {task.title}
+          </Text>
+          {task.recurrence && <Icon name="repeat" size={13} color={semantic.textFaint} />}
+        </View>
         {metaText.length > 0 && (
           <Text style={{ fontSize: 12, color: meta?.overdue ? semantic.danger : semantic.textMuted, marginTop: 2 }}>{metaText}</Text>
         )}
@@ -217,11 +226,12 @@ function AddTaskSheet({ members, onClose }: { members: FamilyMember[]; onClose: 
   const [notes, setNotes] = useState('');
   const [assigneeId, setAssigneeId] = useState<string | undefined>(undefined);
   const [dueDate, setDueDate] = useState<string | null>(null);
+  const [recurrence, setRecurrence] = useState<TaskRecurrence | null>(null);
   const dueOptions = useMemo(buildDueOptions, []);
 
   const submit = () => {
     if (!title.trim()) return;
-    actions.addTask({ title: title.trim(), notes: notes.trim() || undefined, assigneeId, dueDate: dueDate ?? undefined });
+    actions.addTask({ title: title.trim(), notes: notes.trim() || undefined, assigneeId, dueDate: dueDate ?? undefined, recurrence });
     onClose();
   };
 
@@ -269,6 +279,16 @@ function AddTaskSheet({ members, onClose }: { members: FamilyMember[]; onClose: 
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {dueOptions.map((opt) => (
               <Chip key={opt.label} selected={dueDate === opt.value} onPress={() => setDueDate(opt.value)}>
+                {opt.label}
+              </Chip>
+            ))}
+          </View>
+        </Field>
+
+        <Field label="Repeats">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {RECURRENCE_OPTIONS.map((opt) => (
+              <Chip key={opt.label} selected={recurrence === opt.value} onPress={() => setRecurrence(opt.value)}>
                 {opt.label}
               </Chip>
             ))}

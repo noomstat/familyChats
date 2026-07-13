@@ -282,6 +282,8 @@ export function clearCheckedGrocery(token: string) {
 
 // ── Shared Tasks ─────────────────────────────────────────────
 
+export type TaskRecurrence = 'weekly' | 'monthly';
+
 export interface ServerTask {
   id: string;
   familyId: string;
@@ -297,6 +299,8 @@ export interface ServerTask {
   createdBy: string | null;
   /** ISO 8601 timestamp. */
   ts: string;
+  /** Phase Q — null for a one-off task; completing a recurring task auto-spawns the next occurrence. */
+  recurrence: TaskRecurrence | null;
 }
 
 export interface TaskPatch {
@@ -304,13 +308,17 @@ export interface TaskPatch {
   notes?: string | null;
   assigneeId?: string | null;
   dueDate?: string | null;
+  recurrence?: TaskRecurrence | null;
 }
 
 export function getTasks(token: string) {
   return api<{ tasks: ServerTask[] }>('/tasks', { token });
 }
 
-export function addTaskItem(token: string, input: { id: string; title: string; notes?: string; assigneeId?: string; dueDate?: string }) {
+export function addTaskItem(
+  token: string,
+  input: { id: string; title: string; notes?: string; assigneeId?: string; dueDate?: string; recurrence?: TaskRecurrence | null },
+) {
   return api<{ task: ServerTask }>('/tasks', { method: 'POST', body: input, token });
 }
 

@@ -57,6 +57,7 @@ import {
   Copy,
   RefreshCw,
   StickyNote,
+  Repeat,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -122,6 +123,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   copy: Copy,
   'refresh-cw': RefreshCw,
   'sticky-note': StickyNote,
+  repeat: Repeat,
 };
 
 export type IconName = keyof typeof REGISTRY;

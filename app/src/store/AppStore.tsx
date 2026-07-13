@@ -34,6 +34,7 @@ import {
   ServerTask,
   ServerTransfer,
   TaskPatch,
+  TaskRecurrence,
   UploadFile,
   authLogin,
   authLogout,
@@ -1221,7 +1222,7 @@ export function useActions() {
 
       // ── Shared Tasks ─────────────────────────────────────────
 
-      addTask: (input: { title: string; notes?: string; assigneeId?: string; dueDate?: string }) => {
+      addTask: (input: { title: string; notes?: string; assigneeId?: string; dueDate?: string; recurrence?: TaskRecurrence | null }) => {
         const userId = state.session?.userId;
         if (!userId) return;
         const id = uid();
@@ -1237,12 +1238,18 @@ export function useActions() {
           doneAt: null,
           createdBy: userId,
           ts: new Date().toISOString(),
+          recurrence: input.recurrence ?? null,
         };
         dispatch({ type: 'TASK_UPSERT', task });
         if (token) {
-          addTaskItem(token, { id, title: input.title, notes: input.notes, assigneeId: input.assigneeId, dueDate: input.dueDate }).catch((err) =>
-            console.warn('[store] addTask failed', err),
-          );
+          addTaskItem(token, {
+            id,
+            title: input.title,
+            notes: input.notes,
+            assigneeId: input.assigneeId,
+            dueDate: input.dueDate,
+            recurrence: input.recurrence ?? null,
+          }).catch((err) => console.warn('[store] addTask failed', err));
         }
       },
 
@@ -1269,6 +1276,7 @@ export function useActions() {
               ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
               ...(patch.assigneeId !== undefined ? { assigneeId: patch.assigneeId } : {}),
               ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : {}),
+              ...(patch.recurrence !== undefined ? { recurrence: patch.recurrence } : {}),
             },
           });
         }
