@@ -16,3 +16,5 @@ export { MemoriesScreen } from './MemoriesScreen';
 export { FinanceScreen } from './FinanceScreen';
 export { FriendsListScreen } from './FriendsListScreen';
 export { AddFriendScreen } from './AddFriendScreen';
+export { FriendThreadScreen } from './FriendThreadScreen';
+export { NewFriendGroupScreen } from './NewFriendGroupScreen';

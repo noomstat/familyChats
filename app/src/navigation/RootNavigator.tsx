@@ -22,6 +22,8 @@ import {
   AddFamilyScreen,
   FriendsListScreen,
   AddFriendScreen,
+  FriendThreadScreen,
+  NewFriendGroupScreen,
 } from '../screens';
 import type { ChatsStackParamList, FamilyStackParamList, FriendsStackParamList, RootTabParamList } from './types';
 
@@ -35,6 +37,15 @@ const Tab = createBottomTabNavigator<RootTabParamList>();
 function chatsTabBarStyle(route: RouteProp<RootTabParamList, 'Chats'>) {
   const focusedRoute = getFocusedRouteNameFromRoute(route) ?? 'ChatList';
   if (focusedRoute === 'Thread' || focusedRoute === 'NewChat') {
+    return { display: 'none' as const };
+  }
+  return { backgroundColor: semantic.surfaceCard, borderTopColor: semantic.borderSubtle };
+}
+
+// Phase V — same full-bleed treatment for FriendThread as Thread above.
+function friendsTabBarStyle(route: RouteProp<RootTabParamList, 'Friends'>) {
+  const focusedRoute = getFocusedRouteNameFromRoute(route) ?? 'FriendsList';
+  if (focusedRoute === 'FriendThread') {
     return { display: 'none' as const };
   }
   return { backgroundColor: semantic.surfaceCard, borderTopColor: semantic.borderSubtle };
@@ -78,6 +89,8 @@ function FriendsNavigator() {
     <FriendsStack.Navigator screenOptions={{ headerShown: false }}>
       <FriendsStack.Screen name="FriendsList" component={FriendsListScreen} />
       <FriendsStack.Screen name="AddFriend" component={AddFriendScreen} options={{ presentation: 'modal' }} />
+      <FriendsStack.Screen name="FriendThread" component={FriendThreadScreen} />
+      <FriendsStack.Screen name="NewFriendGroup" component={NewFriendGroupScreen} options={{ presentation: 'modal' }} />
     </FriendsStack.Navigator>
   );
 }
@@ -110,7 +123,11 @@ export function RootNavigator() {
       <Tab.Screen
         name="Friends"
         component={FriendsNavigator}
-        options={{ tabBarLabel: 'Friends', tabBarIcon: ({ color, size }) => <Users color={color} size={size} /> }}
+        options={({ route }) => ({
+          tabBarLabel: 'Friends',
+          tabBarIcon: ({ color, size }) => <Users color={color} size={size} />,
+          tabBarStyle: friendsTabBarStyle(route),
+        })}
       />
       <Tab.Screen
         name="Map"

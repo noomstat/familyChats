@@ -30,11 +30,14 @@ export type FamilyStackParamList = {
   AddFamily: undefined;
 };
 
-// Phase U — Friends foundation: a friends list + add-by-QR. No chat yet
-// (Phase V) — tapping a friend on the list is currently a no-op placeholder.
+// Phase U/V — Friends: a friends list + add-by-QR + friend E2EE chat (1:1
+// DMs + friend groups). FriendThread operates on the real, server-backed
+// friends-kind ChatGroup, same shape as ChatsStackParamList's Thread.
 export type FriendsStackParamList = {
   FriendsList: undefined;
   AddFriend: undefined;
+  FriendThread: { group: ChatGroup };
+  NewFriendGroup: undefined;
 };
 
 export type RootTabParamList = {
