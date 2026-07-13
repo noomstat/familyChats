@@ -91,11 +91,22 @@ export async function joinFamily({ code, userId }) {
   const family = rows[0];
   if (!family) throw notFound('no family with that invite code');
 
-  await query(
+  const { rowCount } = await query(
     `INSERT INTO family_members (family_id, user_id, role) VALUES ($1, $2, 'member')
      ON CONFLICT (family_id, user_id) DO NOTHING`,
     [family.id, userId],
   );
+
+  // A fresh join (not a no-op re-join by an existing member) changes the
+  // roster every other member's client is holding — broadcast the full,
+  // current member list so it updates live (join screen, Finance split
+  // pickers, group-settings "add member" chips, nameOf() fallbacks, and —
+  // the case that actually motivated this — E2EE's "who can read this now"
+  // visibility) instead of only refreshing on the joiner's own device.
+  if (rowCount > 0) {
+    const members = await memberRows(family.id);
+    await broadcastToFamily(family.id, { type: 'family', action: 'members', familyId: family.id, members });
+  }
 
   return getFamilyForUser(userId);
 }

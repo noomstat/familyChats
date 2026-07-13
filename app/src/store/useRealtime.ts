@@ -90,6 +90,15 @@ export function useRealtime(): void {
             if (data.action === 'upsert' && data.family) {
               dispatch({ type: 'FAMILY_PATCH', patch: { id: data.family.id, name: data.family.name, inviteCode: data.family.inviteCode, e2ee: data.family.e2ee } });
             }
+            // Phase L — broadcast when someone joins the family (see
+            // family.js's joinFamily) so every existing member's roster
+            // (chat-list nameOf(), Finance split pickers, group-settings
+            // "add member" chips, and — the case that motivated this — who
+            // can now read an E2EE chat) updates live instead of only on
+            // the joiner's own device or after a re-login.
+            else if (data.action === 'members' && data.familyId && data.members) {
+              dispatch({ type: 'FAMILY_PATCH', patch: { id: data.familyId, members: data.members } });
+            }
             break;
           case 'grocery':
             if (data.action === 'upsert') dispatch({ type: 'GROCERY_UPSERT', item: data.item });
