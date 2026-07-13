@@ -13,6 +13,13 @@ import { listKeyRolls } from './family.js';
 import { listNotes } from './notes.js';
 import { getFriends } from './friends.js';
 import { getActiveFamilyId } from './requestContext.js';
+// Phase V — friend-kind groups (1:1 DMs + friend groups) are family-
+// independent (no family_id) but still ride bootstrap/sync alongside the
+// active family's groups. friendChat.js imports assertMember/
+// groupMemberIds/groupMeta back from this module — safe as an ES module
+// circular import since neither side touches the other at module-evaluation
+// time, only inside function bodies called after both modules finish loading.
+import { listFriendGroupIds, listFriendGroupKeys, getFriendGroupShape } from './friendChat.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -65,8 +72,8 @@ async function userFamilyId(userId) {
   return rows[0]?.family_id ?? null;
 }
 
-async function groupMeta(groupId) {
-  const { rows } = await query('SELECT id, family_id, name, created_by FROM groups WHERE id = $1', [groupId]);
+export async function groupMeta(groupId) {
+  const { rows } = await query('SELECT id, family_id, name, created_by, kind FROM groups WHERE id = $1', [groupId]);
   return rows[0] ?? null;
 }
 
@@ -75,13 +82,16 @@ async function familyE2EE(familyId) {
   return !!rows[0]?.e2ee;
 }
 
-async function groupMemberIds(groupId) {
+export async function groupMemberIds(groupId) {
   const { rows } = await query('SELECT user_id FROM group_members WHERE group_id = $1', [groupId]);
   return rows.map((r) => r.user_id);
 }
 
-/** Loads the group and asserts `userId` is one of its members. Throws 404/403. */
-async function assertMember(groupId, userId) {
+/** Loads the group and asserts `userId` is one of its members. Throws 404/403.
+ * Deliberately family-independent: it only ever checks group_members, never
+ * family_members — this is what lets friend-kind groups (no family_id) reuse
+ * every message/read-cursor code path in this file unchanged (Phase V). */
+export async function assertMember(groupId, userId) {
   const group = await groupMeta(groupId);
   if (!group) throw notFound('group not found');
   const { rowCount } = await query('SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2', [groupId, userId]);
@@ -90,7 +100,47 @@ async function assertMember(groupId, userId) {
 }
 
 function groupShape(group, members) {
-  return { id: group.id, familyId: group.family_id, name: group.name, members };
+  return { id: group.id, familyId: group.family_id, kind: group.kind ?? 'family', name: group.name, members };
+}
+
+/** Bootstrap's per-group shape (latest messages + read cursors + unread count) for one already-known group id — shared by the family-groups loop and the friend-groups loop below. */
+async function bootstrapMessagesFor(groupId, userId) {
+  const { rows: msgRows } = await query(
+    'SELECT * FROM messages WHERE group_id = $1 ORDER BY ts DESC LIMIT $2',
+    [groupId, DEFAULT_MESSAGE_LIMIT],
+  );
+  const latest = msgRows.reverse().map(mapMessage);
+
+  const { rows: cursorRows } = await query('SELECT user_id, last_read_ts FROM read_cursors WHERE group_id = $1', [groupId]);
+  const cursors = {};
+  for (const c of cursorRows) cursors[c.user_id] = c.last_read_ts.toISOString();
+  const myCursor = cursors[userId] ?? null;
+
+  const unreadParams = myCursor ? [groupId, userId, myCursor] : [groupId, userId];
+  const unreadSql = `SELECT count(*)::int AS n FROM messages WHERE group_id = $1 AND author_id <> $2${myCursor ? ' AND ts > $3' : ''}`;
+  const { rows: unreadRows } = await query(unreadSql, unreadParams);
+
+  return { latest, unread: unreadRows[0].n, lastReadTs: myCursor, cursors };
+}
+
+/**
+ * Phase V — every friend-kind group (DMs + friend groups) `userId` belongs
+ * to, in the SAME bootstrap shape as a family group (latest/unread/cursors),
+ * plus this user's wrapped friend-group keys. Family-independent — computed
+ * regardless of the active family, same as `friends` — so it rides in BOTH
+ * the family-less early-return and the normal path below.
+ */
+async function friendGroupsBootstrapFor(userId) {
+  const groupIds = await listFriendGroupIds(userId);
+  const friendGroups = [];
+  for (const groupId of groupIds) {
+    const shape = await getFriendGroupShape(groupId);
+    if (!shape) continue;
+    const msgs = await bootstrapMessagesFor(groupId, userId);
+    friendGroups.push({ ...shape, ...msgs });
+  }
+  const friendGroupKeys = await listFriendGroupKeys(userId);
+  return { friendGroups, friendGroupKeys };
 }
 
 // ── Bootstrap / sync ─────────────────────────────────────────
@@ -105,6 +155,8 @@ export async function getBootstrap(userId) {
   // other bootstrap slice below), so they're fetched once up top and
   // included in BOTH the family-less early-return and the normal path.
   const friends = await getFriends(userId);
+  // Phase V — same family-independence as `friends` above.
+  const { friendGroups, friendGroupKeys } = await friendGroupsBootstrapFor(userId);
 
   const familyId = await userFamilyId(userId);
   if (!familyId) {
@@ -121,6 +173,8 @@ export async function getBootstrap(userId) {
       keyRolls: [],
       notes: [],
       friends,
+      friendGroups,
+      friendGroupKeys,
       serverTime: new Date().toISOString(),
     };
   }
@@ -136,35 +190,8 @@ export async function getBootstrap(userId) {
   const groups = [];
   for (const g of groupRows) {
     const members = await groupMemberIds(g.id);
-
-    const { rows: msgRows } = await query(
-      'SELECT * FROM messages WHERE group_id = $1 ORDER BY ts DESC LIMIT $2',
-      [g.id, DEFAULT_MESSAGE_LIMIT],
-    );
-    const latest = msgRows.reverse().map(mapMessage);
-
-    const { rows: cursorRows } = await query(
-      'SELECT user_id, last_read_ts FROM read_cursors WHERE group_id = $1',
-      [g.id],
-    );
-    const cursors = {};
-    for (const c of cursorRows) cursors[c.user_id] = c.last_read_ts.toISOString();
-    const myCursor = cursors[userId] ?? null;
-
-    const unreadParams = myCursor ? [g.id, userId, myCursor] : [g.id, userId];
-    const unreadSql = `SELECT count(*)::int AS n FROM messages WHERE group_id = $1 AND author_id <> $2${myCursor ? ' AND ts > $3' : ''}`;
-    const { rows: unreadRows } = await query(unreadSql, unreadParams);
-
-    groups.push({
-      id: g.id,
-      familyId: g.family_id,
-      name: g.name,
-      members,
-      latest,
-      unread: unreadRows[0].n,
-      lastReadTs: myCursor,
-      cursors,
-    });
+    const msgs = await bootstrapMessagesFor(g.id, userId);
+    groups.push({ id: g.id, familyId: g.family_id, kind: 'family', name: g.name, members, ...msgs });
   }
 
   const grocery = await listGrocery(userId);
@@ -190,7 +217,7 @@ export async function getBootstrap(userId) {
   // dozen rows), so the whole list rides along in bootstrap same as those.
   const notes = await listNotes(userId);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, friendGroups, friendGroupKeys, serverTime: new Date().toISOString() };
 }
 
 /**
@@ -224,6 +251,19 @@ export async function getSyncSince(userId, afterIso) {
   // family-scoped) — computed unconditionally, same as keyRolls' familyId
   // lookup below, so a family-less user's sync still carries them.
   const friends = await getFriends(userId);
+  // Phase V — friend-kind groups' metadata (name/members/keys), full resend
+  // same as `friends` above (user-scale, family-independent). Their actual
+  // NEW messages/reads ride the `messages`/`reads` delta below for free —
+  // that query is already keyed off ALL of a user's group memberships with
+  // no family filter, so it was covering friend groups even before this
+  // phase existed; only the group metadata itself needed adding here.
+  const friendGroupIds = await listFriendGroupIds(userId);
+  const friendGroups = [];
+  for (const groupId of friendGroupIds) {
+    const shape = await getFriendGroupShape(groupId);
+    if (shape) friendGroups.push(shape);
+  }
+  const friendGroupKeys = await listFriendGroupKeys(userId);
 
   const { rows: groupRows } = await query(
     'SELECT group_id FROM group_members WHERE user_id = $1',
@@ -247,7 +287,7 @@ export async function getSyncSince(userId, afterIso) {
     : { rows: [] };
   const keyRolls = rollRows.map((r) => ({ id: r.id, familyId: r.family_id, wrapped: r.wrapped, createdBy: r.created_by, createdAt: r.created_at.toISOString() }));
 
-  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, categories, notes, friends, serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, categories, notes, friends, friendGroups, friendGroupKeys, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -272,6 +312,8 @@ export async function getSyncSince(userId, afterIso) {
     categories,
     notes,
     friends,
+    friendGroups,
+    friendGroupKeys,
     serverTime,
   };
 }
@@ -314,12 +356,17 @@ export async function createMessage({ id, groupId, authorId, kind = 'text', body
 
   // E2EE enforcement (server never decrypts — it only checks shape): once a
   // family has turned encryption on, its text/loc messages MUST arrive as an
-  // envelope. Voice stays unencrypted in v1 (files, not covered — see plan's
-  // out-of-scope list), so it's exempt. An encrypted loc message carries its
-  // {label, meta, live} inside the envelope instead of the `loc` column —
-  // the app-side mapping reads it back out of the decrypted body.
-  if (kind !== 'voice' && (await familyE2EE(group.family_id)) && !isEnvelope(body)) {
-    throw badRequest('family requires encrypted messages');
+  // envelope — and Phase V: EVERY friend conversation (no family, no opt-in)
+  // is unconditionally encrypted, since there's no server-held key to fall
+  // back to. `||` short-circuits familyE2EE(group.family_id) — never called
+  // for a friends-kind group, where family_id is NULL anyway. Voice stays
+  // unencrypted in v1 (files, not covered — see plan's out-of-scope list),
+  // so it's exempt. An encrypted loc message carries its {label, meta, live}
+  // inside the envelope instead of the `loc` column — the app-side mapping
+  // reads it back out of the decrypted body.
+  const needsE2ee = group.kind === 'friends' || (await familyE2EE(group.family_id));
+  if (kind !== 'voice' && needsE2ee && !isEnvelope(body)) {
+    throw badRequest('this conversation requires encrypted messages');
   }
 
   const storedLoc = loc ? { ...loc, ...(live ? { live: true } : {}) } : null;
@@ -350,9 +397,14 @@ export async function createMessage({ id, groupId, authorId, kind = 'text', body
     // can't read them either, but even echoing the ciphertext string back
     // out via a notification would be a needless exposure surface.
     const preview = isEnvelope(body) ? '🔒 New message' : kind === 'voice' ? '🎤 Voice message' : (body || '📍 shared a location');
+    // Phase V — a DM's `group.name` is an internal placeholder (there's no
+    // single meaningful "group name" for two people — see friendChat.js's
+    // openDm), so the notification title uses the sender's name for any
+    // friends-kind conversation instead (works for both DMs and named friend
+    // groups alike, same as how a family group already uses its own name).
     await notifyUsers({
       userIds: recipients,
-      title: group.name,
+      title: group.kind === 'friends' ? authorName : group.name,
       body: isEnvelope(body) ? preview : `${authorName}: ${preview}`,
       data: { type: 'message', groupId },
     });

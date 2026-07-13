@@ -36,6 +36,7 @@ import {
 import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js';
 import { listNotes, addNote, updateNote, removeNote } from './src/notes.js';
 import { publishKey, getFriends, getMyFriendCode, connectByQr } from './src/friends.js';
+import { openDm, createFriendGroup, addFriendGroupMember, leaveFriendGroup, renameFriendGroup } from './src/friendChat.js';
 import { upload, UPLOADS_DIR } from './src/uploads.js';
 import {
   listAlbums,
@@ -389,6 +390,60 @@ app.post('/friends/connect', requireAuth, async (req, res, next) => {
     const { friendId, token, myPublicKey } = req.body ?? {};
     const friend = await connectByQr({ userId: req.user.id, friendId, token, myPublicKey });
     res.status(201).json({ friend });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Friend chat: 1:1 DMs + friend groups (Phase V) ──────────────
+//
+// Family-independent, same as the rest of /friends — no resolveFamily
+// middleware. Messages/reads themselves reuse the existing
+// /groups/:id/messages + /groups/:id/read routes above unchanged (see
+// chat.js's assertMember, which only ever checks group_members).
+
+app.post('/friends/dm', requireAuth, async (req, res, next) => {
+  try {
+    const group = await openDm({ userId: req.user.id, friendId: req.body?.friendId });
+    res.status(201).json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/friends/groups', requireAuth, async (req, res, next) => {
+  try {
+    const { name, memberIds, wrappedKeys } = req.body ?? {};
+    const group = await createFriendGroup({ userId: req.user.id, name, memberIds, wrappedKeys });
+    res.status(201).json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/friends/groups/:id', requireAuth, async (req, res, next) => {
+  try {
+    const group = await renameFriendGroup({ groupId: req.params.id, userId: req.user.id, name: req.body?.name });
+    res.json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/friends/groups/:id/members', requireAuth, async (req, res, next) => {
+  try {
+    const { memberId, wrapped } = req.body ?? {};
+    const group = await addFriendGroupMember({ groupId: req.params.id, actorId: req.user.id, memberId, wrapped });
+    res.status(201).json({ group });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/friends/groups/:id/leave', requireAuth, async (req, res, next) => {
+  try {
+    const group = await leaveFriendGroup({ groupId: req.params.id, userId: req.user.id });
+    res.json({ group });
   } catch (err) {
     next(err);
   }
