@@ -173,10 +173,14 @@ export function ThreadScreen({ route, navigation }: Props) {
     }
   };
 
-  const readByAll = (m: Message): boolean => {
+  // How many *other* members have read this message (their read-cursor has
+  // reached its ts), and how many others there are total — drives the "✓✓ M/N"
+  // receipt under the sender's own bubbles. E2EE-agnostic: cursors are plain
+  // timestamps, unaffected by whether the body is enveloped.
+  const receiptFor = (m: Message): { read: number; total: number } => {
     const others = group.members.filter((id) => id !== m.authorId);
-    if (!others.length) return false;
-    return others.every((id) => (cursors[id] ?? 0) >= m.ts);
+    const read = others.filter((id) => (cursors[id] ?? 0) >= m.ts).length;
+    return { read, total: others.length };
   };
 
   return (
@@ -224,7 +228,7 @@ export function ThreadScreen({ route, navigation }: Props) {
           contentContainerStyle={{ padding: 14, gap: 10 }}
           style={{ backgroundColor: semantic.surfacePage }}
           renderItem={({ item }) => (
-            <ChatMsg m={item} mine={item.authorId === session?.userId} authorName={item.authorName ?? nameOf(item.authorId)} read={item.authorId === session?.userId ? readByAll(item) : undefined} />
+            <ChatMsg m={item} mine={item.authorId === session?.userId} authorName={item.authorName ?? nameOf(item.authorId)} receipt={item.authorId === session?.userId ? receiptFor(item) : undefined} />
           )}
           onEndReached={loadEarlier}
           onEndReachedThreshold={0.4}
@@ -303,7 +307,7 @@ export function ThreadScreen({ route, navigation }: Props) {
   );
 }
 
-function ChatMsg({ m, mine, authorName, read }: { m: Message; mine: boolean; authorName: string; read?: boolean }) {
+function ChatMsg({ m, mine, authorName, receipt }: { m: Message; mine: boolean; authorName: string; receipt?: { read: number; total: number } }) {
   if (m.locked) {
     // Tamper/wrong-key/no-key — all three render identically here (the app
     // can't distinguish them, and shouldn't try to guess which).
@@ -331,9 +335,11 @@ function ChatMsg({ m, mine, authorName, read }: { m: Message; mine: boolean; aut
       <ChatBubble mine={mine} author={mine ? undefined : authorName} attachment={attachment}>
         {m.kind === 'text' ? m.text : undefined}
       </ChatBubble>
-      {mine && (
-        <Text style={{ fontFamily: fontFamily.mono, fontSize: 10, marginTop: 2, marginRight: 8, color: read ? colors.coral500 : semantic.textFaint }}>
-          {read ? '✓✓' : '✓'}
+      {mine && receipt && (
+        <Text style={{ fontFamily: fontFamily.mono, fontSize: 10, marginTop: 2, marginRight: 8, color: receipt.total > 0 && receipt.read === receipt.total ? colors.coral500 : semantic.textFaint }}>
+          {receipt.total === 0
+            ? '✓'
+            : `${receipt.read === receipt.total ? '✓✓' : '✓'} ${receipt.read}/${receipt.total}`}
         </Text>
       )}
     </View>
