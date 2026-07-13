@@ -27,6 +27,8 @@ export {
   useNotes,
   useAlbums,
   useAlbumPhotos,
+  useFriends,
+  useIdentityReady,
 } from './AppStore';
 export type { AppState, ChatRow, ChatGroup, Session, FamilyState, FinanceState } from './AppStore';
 export { useRealtime } from './useRealtime';

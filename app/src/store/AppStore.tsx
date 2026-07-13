@@ -16,12 +16,15 @@ import {
 } from './model';
 import { tokenStorage } from './tokenStorage';
 import { keyStorage } from './keyStorage';
+import { identityKeyStorage } from './identityKeyStorage';
 import { decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput, unwrapKey, wrapKey } from '../crypto/e2ee';
+import { buildFriendCode, generateIdentityKeypair, parseFriendCode } from '../crypto/friends';
 import {
   BootstrapResponse,
   EventPatch,
   FamilyInfo,
   FamilyMember,
+  Friend,
   KeyRoll,
   ServerAlbum,
   ServerBudget,
@@ -50,17 +53,20 @@ import {
   addTaskItem,
   addTransfer as apiAddTransfer,
   clearCheckedGrocery as apiClearCheckedGrocery,
+  connectByQr as apiConnectByQr,
   createAlbumItem,
   createFamily as apiCreateFamily,
   createGroup as apiCreateGroup,
   getAlbumPhotos,
   getBootstrap,
+  getFriendCode,
   getGroupMessages,
   getMe,
   joinFamily as apiJoinFamily,
   postKeyRoll,
   postMessage,
   postRead,
+  publishKey as apiPublishKey,
   putBudget as apiPutBudget,
   remindPayment as apiRemindPayment,
   removeAlbumItem,
@@ -166,6 +172,10 @@ export interface AppState {
   /** Photos per album, ascending by ts — loaded lazily via loadPhotos(); an
    * absent key means "not loaded yet" (vs. an empty array = loaded, empty). */
   photosByAlbum: Record<string, ServerPhoto[]>;
+  /** Phase U — user-level and family-independent (present even for a family-less user), unsorted — see useFriends(). */
+  friends: Friend[];
+  /** Phase U — true once this device's identity keypair exists AND its public key has been published to the server at least once this session. Not persisted — re-derived each launch (see the identity-ready effect below). */
+  identityReady: boolean;
   /** True once we've attempted to load persisted state. */
   hydrated: boolean;
   /** The signed-in user, or null when logged out. Not persisted to AsyncStorage —
@@ -198,7 +208,7 @@ export interface AppState {
 /** The persisted slice — local/offline-read demo + chat cache. Session/family(s)/
  * activeFamilyId are re-fetched/re-read from the server/dedicated storage each
  * launch, never cached in this generic blob. */
-type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'families' | 'activeFamilyId' | 'sessionReady' | 'hasFamilyKey'>;
+type Persisted = Omit<AppState, 'hydrated' | 'session' | 'family' | 'families' | 'activeFamilyId' | 'sessionReady' | 'hasFamilyKey' | 'identityReady'>;
 
 const seedState: AppState = {
   groups: {},
@@ -218,6 +228,8 @@ const seedState: AppState = {
   notes: [],
   albums: [],
   photosByAlbum: {},
+  friends: [],
+  identityReady: false,
   hydrated: false,
   session: null,
   families: [],
@@ -398,6 +410,9 @@ type Action =
   | { type: 'PHOTOS_SET'; albumId: string; photos: ServerPhoto[] }
   | { type: 'PHOTO_UPSERT'; photo: ServerPhoto }
   | { type: 'PHOTO_REMOVE'; id: string; albumId: string }
+  | { type: 'FRIEND_SET'; friends: Friend[] }
+  | { type: 'FRIEND_UPSERT'; friend: Friend }
+  | { type: 'SET_IDENTITY_READY'; value: boolean }
   | { type: 'SET_SESSION'; session: Session | null }
   // Phase S — replaces the old single-family SET_FAMILY with three cases for
   // a multi-family world: FAMILY_CONTEXT (full refresh from /me), FAMILY_ACTIVATE
@@ -438,6 +453,7 @@ function reducer(state: AppState, action: Action): AppState {
             family: state.family,
             sessionReady: state.sessionReady,
             hasFamilyKey: state.hasFamilyKey,
+            identityReady: state.identityReady,
             hydrated: true,
           }
         : { ...state, hydrated: true };
@@ -478,6 +494,7 @@ function reducer(state: AppState, action: Action): AppState {
         finTransfers: action.payload.transfers,
         budget: action.payload.budget,
         categories: action.payload.categories,
+        friends: action.payload.friends,
         lastSync: action.payload.serverTime,
       };
     }
@@ -788,6 +805,20 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, albums, photosByAlbum };
     }
 
+    case 'FRIEND_SET':
+      return { ...state, friends: action.friends };
+
+    case 'FRIEND_UPSERT': {
+      const idx = state.friends.findIndex((f) => f.id === action.friend.id);
+      const friends = idx >= 0
+        ? state.friends.map((f, i) => (i === idx ? action.friend : f))
+        : [...state.friends, action.friend];
+      return { ...state, friends };
+    }
+
+    case 'SET_IDENTITY_READY':
+      return state.identityReady === action.value ? state : { ...state, identityReady: action.value };
+
     case 'SET_SESSION':
       return { ...state, session: action.session };
 
@@ -840,8 +871,11 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'LOGOUT':
       // Clears session+family(s) only — local/cached data stays put (the next
-      // login's bootstrap replaces the chat slices wholesale).
-      return { ...state, session: null, families: [], activeFamilyId: null, family: null, hasFamilyKey: false };
+      // login's bootstrap replaces the chat slices wholesale). identityReady
+      // resets so a different account logging in on this device re-runs the
+      // identity-keypair-exists + publish effect for ITS OWN session, rather
+      // than skipping it because a previous user's flag was left true.
+      return { ...state, session: null, families: [], activeFamilyId: null, family: null, hasFamilyKey: false, identityReady: false };
 
     default:
       return state;
@@ -940,6 +974,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       family: _family,
       sessionReady: _sessionReady,
       hasFamilyKey: _hasFamilyKey,
+      identityReady: _identityReady,
       ...persisted
     } = state;
     const messages: Record<string, Message[]> = {};
@@ -1007,6 +1042,36 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         if (!cancelled) dispatch({ type: 'BOOTSTRAP', payload });
       })
       .catch((err) => console.warn('[store] bootstrap failed', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [state.session?.token]);
+
+  // Phase U — ensure this device holds a Friends identity keypair (generating
+  // one on first use) and that its public key is published to the server,
+  // whenever a session becomes available. Idempotent both locally (identity
+  // keypair persists in SecureStore across app restarts — generated at most
+  // once per device) and server-side (publishKey is an upsert), so re-running
+  // this on every fresh login/relaunch is always safe. The private key never
+  // leaves this effect's own device — only publicB64 goes over the wire.
+  useEffect(() => {
+    const token = state.session?.token;
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        let keypair = await identityKeyStorage.get();
+        if (!keypair) {
+          keypair = generateIdentityKeypair();
+          await identityKeyStorage.set(keypair);
+        }
+        if (cancelled) return;
+        await apiPublishKey(token, keypair.pubB64);
+        if (!cancelled) dispatch({ type: 'SET_IDENTITY_READY', value: true });
+      } catch (err) {
+        console.warn('[store] identity key publish failed', err);
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -1753,6 +1818,37 @@ export function useActions() {
         familyKeyRing = { familyId, keys };
         await keyStorage.setRing(familyId, keys);
       },
+
+      // ── Friends (Phase U) ─────────────────────────────────────
+
+      /**
+       * My own shareable QR/typed-code payload (`fc:1:<userId>.<token>.<pub>`).
+       * Fetches fresh token/key material from the server each call so the code
+       * shown is always the currently-valid one.
+       */
+      getMyFriendCode: async (): Promise<string> => {
+        if (!token) throw new Error('not signed in');
+        const code = await getFriendCode(token);
+        return buildFriendCode({ userId: code.userId, friendToken: code.friendToken, pubKeyB64: code.publicKey });
+      },
+
+      /**
+       * Instant-connect from a scanned/typed friend code (see
+       * crypto/friends.ts's parseFriendCode — the caller parses the raw
+       * `fc:1:…` string before calling this). Reads this device's own
+       * identity keypair (guaranteed to exist once identityReady is true —
+       * see the identity-ready effect above) to supply myPublicKey, then
+       * upserts the returned friend into the store; the other side gets the
+       * same upsert via the `friend` WS broadcast (see useRealtime.ts).
+       */
+      connectFriend: async (payload: { friendId: string; token: string }): Promise<Friend> => {
+        if (!token) throw new Error('not signed in');
+        const keypair = await identityKeyStorage.get();
+        if (!keypair) throw new Error("This device doesn't have an identity key yet — try again in a moment");
+        const { friend } = await apiConnectByQr(token, { friendId: payload.friendId, token: payload.token, myPublicKey: keypair.pubB64 });
+        dispatch({ type: 'FRIEND_UPSERT', friend });
+        return friend;
+      },
     }),
     [dispatch, token, state.session, state.family, state.families, state.activeFamilyId, state.messages, state.grocery, state.tasks, state.events, state.notes, state.albums],
   );
@@ -1970,4 +2066,15 @@ export function useAlbums(): ServerAlbum[] {
 /** An album's photos, ascending by ts — or undefined until loadPhotos(albumId) has run. */
 export function useAlbumPhotos(albumId: string): ServerPhoto[] | undefined {
   return useCtx().state.photosByAlbum[albumId];
+}
+
+/** Phase U — this user's friends (user-level, family-independent), sorted by display name. */
+export function useFriends(): Friend[] {
+  const { state } = useCtx();
+  return useMemo(() => [...state.friends].sort((a, b) => a.name.localeCompare(b.name)), [state.friends]);
+}
+
+/** Phase U — true once this device's identity keypair exists and its public key has been published this session. */
+export function useIdentityReady(): boolean {
+  return useCtx().state.identityReady;
 }

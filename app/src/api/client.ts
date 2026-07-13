@@ -194,6 +194,8 @@ export interface BootstrapResponse {
   keyRolls: KeyRoll[];
   /** Phase P — E2EE shared notes, full current list (family-scale, like grocery/tasks/events). */
   notes: ServerNote[];
+  /** Phase U — user-level and family-independent: present even for a family-less user. */
+  friends: Friend[];
   serverTime: string;
 }
 
@@ -215,6 +217,8 @@ export interface SyncResponse {
   categories: ServerCategory[];
   /** Full current list, like grocery/tasks/events. */
   notes: ServerNote[];
+  /** Phase U — full current list, like grocery/tasks/events; user-level and family-independent. */
+  friends: Friend[];
   serverTime: string;
 }
 
@@ -731,6 +735,46 @@ export interface TimelineResponse {
 /** Not part of bootstrap/sync — fetched on-demand when the Memories screen opens (see server/src/timeline.js). */
 export function getTimeline(token: string) {
   return api<TimelineResponse>('/timeline', { token });
+}
+
+// ── Friends (Phase U) ────────────────────────────────────────
+//
+// User-level and family-independent — these work regardless of the active
+// family / X-Family-Id header. The server only ever stores/returns PUBLIC
+// keys; the private identity key never leaves the device (see
+// app/src/store/identityKeyStorage.ts).
+
+export interface Friend {
+  id: string;
+  name: string;
+  username: string;
+  /** Base64 X25519 public key, or null if that friend has never published one. */
+  publicKey: string | null;
+}
+
+export interface FriendCode {
+  userId: string;
+  friendToken: string;
+  publicKey: string;
+}
+
+/** Publish (or refresh) this device's identity public key. Idempotent — keeps the existing friendToken unless this is the first publish. */
+export function publishKey(token: string, publicKey: string) {
+  return api<{ publicKey: string; friendToken: string }>('/friends/keys', { method: 'POST', body: { publicKey }, token });
+}
+
+export function getFriends(token: string) {
+  return api<{ friends: Friend[] }>('/friends', { token });
+}
+
+/** This user's own QR/typed-code payload material — build the `fc:1:…` string with crypto/friends.ts's buildFriendCode(). */
+export function getFriendCode(token: string) {
+  return api<FriendCode>('/friends/code', { token });
+}
+
+/** Instant-connect from a scanned/typed friend code: `friendId`+`token` come from parseFriendCode(), `myPublicKey` from this device's identity keypair. */
+export function connectByQr(token: string, input: { friendId: string; token: string; myPublicKey: string }) {
+  return api<{ friend: Friend }>('/friends/connect', { method: 'POST', body: input, token });
 }
 
 // ── Realtime ─────────────────────────────────────────────────

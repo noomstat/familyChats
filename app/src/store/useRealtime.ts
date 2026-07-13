@@ -78,6 +78,10 @@ export function useRealtime(): void {
           dispatch({ type: 'ALBUM_SET', albums: data.albums });
           dispatch({ type: 'FIN_SET', expenses: data.expenses, transfers: data.transfers, budget: data.budget });
           dispatch({ type: 'CATEGORY_SET', categories: data.categories });
+          // Phase U — full resend on every sync, same as grocery/tasks/events/
+          // albums above (user-level, not family-scoped, but the same
+          // "simplest-correct" full-replace applies).
+          dispatch({ type: 'FRIEND_SET', friends: data.friends });
           dispatch({ type: 'SET_LAST_SYNC', serverTime: data.serverTime });
         } else {
           const data = await getBootstrap(session.token);
@@ -224,6 +228,14 @@ export function useRealtime(): void {
             if (data.action === 'upsert') {
               if (isActiveFamily(data.category?.familyId)) dispatch({ type: 'CATEGORY_UPSERT', category: data.category });
             } else if (data.action === 'remove') dispatch({ type: 'CATEGORY_REMOVE', id: data.id });
+            break;
+          // Phase U — friends are user-level and family-independent (no
+          // familyId to filter on, unlike every other case above), so this
+          // upserts unconditionally: connectByQr broadcasts to exactly the
+          // two users involved (see server/src/friends.js), so any `friend`
+          // event this socket receives is always meant for the signed-in user.
+          case 'friend':
+            if (data.action === 'upsert' && data.friend) dispatch({ type: 'FRIEND_UPSERT', friend: data.friend });
             break;
           default:
             break; // 'hello' and any future event types we don't handle yet
