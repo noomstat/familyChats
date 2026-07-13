@@ -83,8 +83,8 @@ export function FamilyGateScreen({ onCreatedWithKey }: { onCreatedWithKey?: (inv
               <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 17, color: semantic.textStrong }}>Join with invite code</Text>
             </View>
             <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted, marginBottom: 14 }}>
-              Ask a family member for their invite code — or paste the full extended invite
-              (with the {'#'} part) to also unlock encrypted messages automatically.
+              Every family is end-to-end encrypted, so paste the full invite (with the key after
+              {' '}{'#'}) so you can read messages — a bare code still joins, but lands locked.
             </Text>
             <Input
               value={code}

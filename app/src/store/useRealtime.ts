@@ -82,11 +82,12 @@ export function useRealtime(): void {
             dispatch({ type: 'GROUP_UPSERT', group: data.group });
             break;
           case 'family':
-            // Phase K — broadcast when the owner flips e2ee on (see
-            // family.js's setE2EE). SET_FAMILY expects the full FamilyState
-            // shape (incl. `members`), which the family event doesn't carry,
-            // so merge the flag change onto whatever family state we already
-            // have rather than dropping members to [].
+            // 'upsert' has no current server-side sender (Phase K's e2ee-flip
+            // broadcast was removed in Phase M once encryption became
+            // mandatory-at-creation) — kept as a forward-compatible patch path
+            // for future family-attribute broadcasts (e.g. a rename). Merges
+            // onto whatever family state we already have rather than
+            // dropping `members` to [], since this event doesn't carry it.
             if (data.action === 'upsert' && data.family) {
               dispatch({ type: 'FAMILY_PATCH', patch: { id: data.family.id, name: data.family.name, inviteCode: data.family.inviteCode, e2ee: data.family.e2ee } });
             }

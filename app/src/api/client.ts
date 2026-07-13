@@ -105,11 +105,6 @@ export function regenerateFamilyCode(token: string) {
   return api<FamilyInfo>('/families/regenerate-code', { method: 'POST', token });
 }
 
-/** Owner-only, one-way: turns on end-to-end encryption for the caller's family. */
-export function setFamilyE2EE(token: string) {
-  return api<FamilyInfo>('/families/e2ee', { method: 'POST', body: { enabled: true }, token });
-}
-
 export function getFamilyMembers(token: string) {
   return api<{ members: FamilyMember[] }>('/families/members', { token });
 }

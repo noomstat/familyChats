@@ -65,7 +65,6 @@ import {
   renameAlbumItem,
   renameGroup as apiRenameGroup,
   scanReceiptUpload,
-  setFamilyE2EE,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
@@ -192,7 +191,7 @@ const seedState: AppState = {
 // per user, so a single slot (not keyed per-family-id beyond the guard below)
 // is sufficient; the familyId is kept alongside the key purely as a staleness
 // guard against a leftover cache entry from a previously-loaded family.
-// Populated: on family load, after enableE2EE(), after importFamilyKey(),
+// Populated: on family load, after createFamily(), after importFamilyKey(),
 // and after joinFamily() when the invite carried a key. Cleared on logout.
 // AppState.hasFamilyKey mirrors this for reactive UI (useE2EE()).
 let familyKeyCache: { familyId: string; keyB64: string } | null = null;
@@ -1267,13 +1266,12 @@ export function useActions() {
       },
 
       /**
-       * New families are E2EE by default (see plan) — this generates+stores
-       * the key and flips the server flag as part of the same call, before
-       * ever exposing the family to the UI, rather than chaining a separate
-       * enableE2EE() call (which would race a stale `state.family` closure
-       * from the render that kicked off createFamily). Returns the raw key
-       * alongside the family so the caller can show/share the extended
-       * invite immediately — it's never retrievable from the server again.
+       * Families are born E2EE — the server sets `e2ee: true` on the INSERT
+       * itself (no opt-in, no separate enable call). This just generates the
+       * local key and stores it before ever exposing the family to the UI.
+       * Returns the raw key alongside the family so the caller can show/share
+       * the extended invite immediately — it's never retrievable from the
+       * server again.
        */
       createFamily: async (name: string): Promise<{ family: FamilyState; keyB64: string }> => {
         if (!token) throw new Error('not signed in');
@@ -1283,8 +1281,7 @@ export function useActions() {
         await keyStorage.set(familyId, keyB64);
         familyKeyCache = { familyId, keyB64 };
         dispatch({ type: 'SET_HAS_KEY', value: true });
-        const enabledInfo = await setFamilyE2EE(token);
-        const family = toFamilyState(enabledInfo);
+        const family = toFamilyState(info);
         dispatch({ type: 'SET_FAMILY', family });
         return { family, keyB64 };
       },
@@ -1300,25 +1297,6 @@ export function useActions() {
           dispatch({ type: 'SET_HAS_KEY', value: true });
         }
         dispatch({ type: 'SET_FAMILY', family });
-      },
-
-      /**
-       * Owner-only, one-way: generates a fresh family key, stores it locally,
-       * flips the server flag, and returns the raw key so the caller (the
-       * "save this key" UI) can build/share the extended invite. Nothing
-       * needs re-decrypting here — there's no encrypted history yet the
-       * moment encryption turns on.
-       */
-      enableE2EE: async (): Promise<string> => {
-        if (!token || !state.family) throw new Error('not signed in or not in a family');
-        const familyId = state.family.id;
-        const keyB64 = await generateFamilyKey();
-        await keyStorage.set(familyId, keyB64);
-        familyKeyCache = { familyId, keyB64 };
-        dispatch({ type: 'SET_HAS_KEY', value: true });
-        const info = await setFamilyE2EE(token);
-        dispatch({ type: 'SET_FAMILY', family: toFamilyState(info) });
-        return keyB64;
       },
 
       /**
