@@ -533,21 +533,8 @@ export interface ServerBudget {
   amount: number;
 }
 
-export interface ReceiptScan {
-  merchant: string | null;
-  total: number | null;
-  currency: string | null;
-  /** 'YYYY-MM-DD', or null. */
-  date: string | null;
-  items: { label: string; amount: number }[];
-  suggestedCategory: CategoryId;
-}
-
-export interface ScanReceiptResponse {
+export interface UploadReceiptResponse {
   receiptPath: string;
-  scan: ReceiptScan | null;
-  /** Present when the scan itself failed (e.g. AI unconfigured) — the upload still succeeded. */
-  scanError?: string;
 }
 
 export function addExpense(
@@ -573,44 +560,9 @@ export function remindPayment(token: string, input: { toUserId: string; amount: 
   return api<{ ok: true }>('/finance/remind', { method: 'POST', body: input, token });
 }
 
-/** Multipart upload of a receipt photo + best-effort AI scan. Reuses uploadFile — see ScanReceiptResponse for the graceful-degrade shape. */
-export function scanReceiptUpload(token: string, file: UploadFile) {
-  return uploadFile<ScanReceiptResponse>(token, '/finance/scan-receipt', file);
-}
-
-// ── AI: Chat Summary + AI Search (Phase G) ────────────────────
-
-export interface GroupSummaryResponse {
-  /** null when every message in range is encrypted (see `encrypted`) — AI can't read them. */
-  summary: string | null;
-  messageCount: number;
-  /** True when the chat is end-to-end encrypted and there was nothing readable left to summarize. */
-  encrypted?: boolean;
-}
-
-/** 4-6 bullet catch-up for the last ~100 messages in a group. Throws (with a friendly message) if AI isn't configured server-side. */
-export function getGroupSummary(token: string, groupId: string) {
-  return api<GroupSummaryResponse>(`/groups/${groupId}/summary`, { method: 'POST', token });
-}
-
-export interface AiHit {
-  type: 'message' | 'task' | 'event' | 'grocery' | 'photo' | 'album';
-  id: string;
-  label: string;
-  snippet: string;
-  /** ISO 8601 timestamp. */
-  ts: string;
-  /** Present only for `type: 'message'` hits — which group to open. */
-  groupId?: string;
-}
-
-export interface AiSearchResponse {
-  answer: string;
-  hits: AiHit[];
-}
-
-export function aiSearch(token: string, query: string) {
-  return api<AiSearchResponse>('/search', { method: 'POST', body: { query }, token });
+/** Multipart upload of a receipt photo — stores it and returns its path for manual expense entry. */
+export function uploadReceipt(token: string, file: UploadFile) {
+  return uploadFile<UploadReceiptResponse>(token, '/finance/scan-receipt', file);
 }
 
 // ── Voice messages (Phase F) ─────────────────────────────────

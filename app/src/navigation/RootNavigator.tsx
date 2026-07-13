@@ -16,7 +16,6 @@ import {
   TasksScreen,
   AlbumsScreen,
   AlbumScreen,
-  AISearchScreen,
   MemoriesScreen,
   FinanceScreen,
 } from '../screens';
@@ -58,7 +57,6 @@ function FamilyNavigator() {
       <FamilyStack.Screen name="Tasks" component={TasksScreen} />
       <FamilyStack.Screen name="Albums" component={AlbumsScreen} />
       <FamilyStack.Screen name="Album" component={AlbumScreen} />
-      <FamilyStack.Screen name="AISearch" component={AISearchScreen} />
       <FamilyStack.Screen name="Memories" component={MemoriesScreen} />
       <FamilyStack.Screen name="Finance" component={FinanceScreen} />
     </FamilyStack.Navigator>

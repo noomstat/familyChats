@@ -20,8 +20,8 @@ interface HubTile {
   onPress?: () => void;
 }
 
-// Calendar, Grocery, Tasks & Albums are live as of Phase E, AI Search as of
-// Phase G, Memories as of Phase H — every tile is live.
+// Calendar, Grocery, Tasks & Albums are live as of Phase E, Memories as of
+// Phase H — every tile is live.
 export function FamilyHubScreen({ navigation }: Props) {
   const family = useFamily();
   const grocery = useGrocery();
@@ -82,15 +82,6 @@ export function FamilyHubScreen({ navigation }: Props) {
       tint: colors.ink100,
       tintFg: colors.ink600,
       onPress: () => navigation.navigate('Memories'),
-    },
-    {
-      key: 'ai-search',
-      icon: 'sparkles',
-      label: 'AI Search',
-      subtitle: 'Ask anything',
-      tint: colors.coral50,
-      tintFg: colors.coral500,
-      onPress: () => navigation.navigate('AISearch'),
     },
     {
       key: 'finance',

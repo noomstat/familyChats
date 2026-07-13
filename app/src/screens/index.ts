@@ -11,6 +11,5 @@ export { GroceryScreen } from './GroceryScreen';
 export { TasksScreen } from './TasksScreen';
 export { AlbumsScreen } from './AlbumsScreen';
 export { AlbumScreen } from './AlbumScreen';
-export { AISearchScreen } from './AISearchScreen';
 export { MemoriesScreen } from './MemoriesScreen';
 export { FinanceScreen } from './FinanceScreen';

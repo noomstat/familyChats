@@ -9,7 +9,7 @@ export type ChatsStackParamList = {
 };
 
 // The Family hub tab: a Card grid linking to Calendar, Grocery, Tasks, Albums,
-// Memories, AI Search, and Finance (family-wide shared ledger, Phase I).
+// Memories, and Finance (family-wide shared ledger, Phase I).
 export type FamilyStackParamList = {
   FamilyHub: undefined;
   Calendar: undefined;
@@ -19,7 +19,6 @@ export type FamilyStackParamList = {
   // `name` is a render-immediately fallback; the screen prefers the live
   // album from the store (rename/photoCount updates) once available.
   Album: { albumId: string; name: string };
-  AISearch: undefined;
   Memories: undefined;
   Finance: undefined;
 };

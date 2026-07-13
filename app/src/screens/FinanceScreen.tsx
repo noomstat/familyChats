@@ -361,20 +361,20 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
   const [split, setSplit] = useState<string[]>(members.map((m) => m.id));
   const [receiptPath, setReceiptPath] = useState<string | undefined>(undefined);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(false);
-  const [scanHint, setScanHint] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachHint, setAttachHint] = useState<string | null>(null);
 
   const amount = parseFloat(amountStr.replace(',', '.'));
   const valid = label.trim().length > 0 && amount > 0 && split.length > 0 && !!paidBy;
 
   const toggleSplit = (id: string) => setSplit((s) => (s.includes(id) ? s.filter((n) => n !== id) : [...s, id]));
 
-  const scanReceipt = async () => {
-    setScanHint(null);
+  const attachReceipt = async () => {
+    setAttachHint(null);
     if (Platform.OS !== 'web') {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
-        setScanHint('Photo library access was denied.');
+        setAttachHint('Photo library access was denied.');
         return;
       }
     }
@@ -383,21 +383,15 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
     const asset = result.assets[0];
     const mimeType = asset.mimeType ?? 'image/jpeg';
     const name = asset.fileName ?? `receipt-${Date.now()}.${mimeType.split('/')[1] ?? 'jpg'}`;
-    setScanning(true);
+    setAttaching(true);
     try {
-      const { receiptPath: uploadedPath, scan, scanError } = await actions.scanReceipt({ uri: asset.uri, name, mimeType });
+      const { receiptPath: uploadedPath } = await actions.uploadReceipt({ uri: asset.uri, name, mimeType });
       setReceiptPath(uploadedPath);
       setPreviewUri(asset.uri);
-      if (scan) {
-        if (scan.merchant) setLabel(scan.merchant);
-        if (scan.total) setAmountStr(String(scan.total));
-        setCategoryId(scan.suggestedCategory);
-      }
-      setScanHint(scanError ? "AI isn't set up yet — photo attached, fill in the details below." : null);
     } catch (err) {
-      setScanHint(err instanceof Error ? err.message : 'Could not scan the receipt.');
+      setAttachHint(err instanceof Error ? err.message : 'Could not attach the receipt.');
     } finally {
-      setScanning(false);
+      setAttaching(false);
     }
   };
 
@@ -436,18 +430,18 @@ function AddExpenseSheet({ members, me, onClose }: { members: FamilyMember[]; me
         <Button
           variant="secondary"
           leadingIcon={<Text style={{ fontSize: 16 }}>📷</Text>}
-          disabled={scanning}
-          onPress={scanReceipt}
+          disabled={attaching}
+          onPress={attachReceipt}
         >
-          {scanning ? 'Scanning…' : 'Scan receipt'}
+          {attaching ? 'Attaching…' : 'Attach receipt'}
         </Button>
         {!!previewUri && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <Image source={{ uri: previewUri }} style={{ width: 44, height: 44, borderRadius: radius.md }} />
-            {!!scanHint && <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>{scanHint}</Text>}
+            {!!attachHint && <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>{attachHint}</Text>}
           </View>
         )}
-        {!previewUri && !!scanHint && <Text style={{ fontSize: 12, color: semantic.textMuted }}>{scanHint}</Text>}
+        {!previewUri && !!attachHint && <Text style={{ fontSize: 12, color: semantic.textMuted }}>{attachHint}</Text>}
 
         <Field label="What was it for?">
           <Input value={label} onChangeText={setLabel} placeholder="e.g. Groceries" />

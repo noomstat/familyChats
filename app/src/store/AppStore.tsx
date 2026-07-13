@@ -21,7 +21,6 @@ import {
   FamilyInfo,
   FamilyMember,
   KeyRoll,
-  ReceiptScan,
   ServerAlbum,
   ServerBudget,
   ServerEvent,
@@ -66,12 +65,12 @@ import {
   removeTaskItem,
   renameAlbumItem,
   renameGroup as apiRenameGroup,
-  scanReceiptUpload,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
   updateTaskItem,
   uploadPhoto,
+  uploadReceipt as apiUploadReceipt,
   uploadVoice,
 } from '../api/client';
 
@@ -1093,10 +1092,10 @@ export function useActions() {
         await apiRemindPayment(token, { toUserId: toId, amount });
       },
 
-      /** Upload a receipt photo + best-effort AI scan (graceful-degrade — see ScanReceiptResponse). */
-      scanReceipt: async (image: UploadFile): Promise<{ receiptPath: string; scan: ReceiptScan | null; scanError?: string }> => {
+      /** Upload a receipt photo for manual expense entry — returns its stored path. */
+      uploadReceipt: async (image: UploadFile): Promise<{ receiptPath: string }> => {
         if (!token) throw new Error('not signed in');
-        return scanReceiptUpload(token, image);
+        return apiUploadReceipt(token, image);
       },
 
       // ── Shared Grocery List ──────────────────────────────────
