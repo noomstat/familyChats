@@ -27,10 +27,3 @@ CREATE TABLE IF NOT EXISTS photos (
 
 CREATE INDEX IF NOT EXISTS photos_album_ts_idx ON photos (album_id, ts);
 CREATE INDEX IF NOT EXISTS photos_family_ts_idx ON photos (family_id, ts);
-
--- Demo seed: family "The Nows" (fam-nows) gets one empty album. Deliberately
--- no seed photos — a photo row points at a file in server/uploads/, and seeded
--- rows would reference files that don't exist on disk.
-INSERT INTO albums (id, family_id, name, created_by, ts) VALUES
-  ('seed-album-1', 'fam-nows', 'Summer 2026', 'mara', now() - interval '2 days')
-ON CONFLICT (id) DO NOTHING;

@@ -36,26 +36,3 @@ CREATE TABLE IF NOT EXISTS family_members (
 );
 
 CREATE INDEX IF NOT EXISTS family_members_user_id_idx ON family_members (user_id);
-
--- Demo seed: 5 users (password "family123" for all) + one family "The Nows".
--- Hash below is bcryptjs.hash('family123', 10) — generated once, reused for
--- every seed user (verified with bcryptjs.compare before committing this file).
-INSERT INTO users (id, username, name, password_hash) VALUES
-  ('you',  'you',  'You Now',  '$2b$10$57vFr36psNb0Tc5mbR3UEuMYd06msOzyVD2LK1R1QNSGfHty.W2Ca'),
-  ('mara', 'mara', 'Mara Ito', '$2b$10$57vFr36psNb0Tc5mbR3UEuMYd06msOzyVD2LK1R1QNSGfHty.W2Ca'),
-  ('dev',  'dev',  'Dev Kaur', '$2b$10$57vFr36psNb0Tc5mbR3UEuMYd06msOzyVD2LK1R1QNSGfHty.W2Ca'),
-  ('sam',  'sam',  'Sam Ng',   '$2b$10$57vFr36psNb0Tc5mbR3UEuMYd06msOzyVD2LK1R1QNSGfHty.W2Ca'),
-  ('mom',  'mom',  'Mom',      '$2b$10$57vFr36psNb0Tc5mbR3UEuMYd06msOzyVD2LK1R1QNSGfHty.W2Ca')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO families (id, name, invite_code, created_by) VALUES
-  ('fam-nows', 'The Nows', 'FAM123', 'you')
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO family_members (family_id, user_id, role) VALUES
-  ('fam-nows', 'you',  'owner'),
-  ('fam-nows', 'mara', 'member'),
-  ('fam-nows', 'dev',  'member'),
-  ('fam-nows', 'sam',  'member'),
-  ('fam-nows', 'mom',  'member')
-ON CONFLICT (family_id, user_id) DO NOTHING;
