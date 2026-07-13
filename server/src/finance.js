@@ -19,6 +19,7 @@ import { query } from './db.js';
 import { broadcastToFamily } from './ws.js';
 import { notifyUsers } from './notifications.js';
 import { UPLOADS_DIR } from './uploads.js';
+import { getActiveFamilyId } from './requestContext.js';
 
 // Kept in sync with the client's built-in CATEGORIES (app/src/store/model.ts)
 // — these five ids are always valid on an expense regardless of what a
@@ -51,7 +52,10 @@ function conflict(message) {
   return err;
 }
 
+// Phase S — see lists.js's copy of this helper for the request-context rationale.
 async function userFamilyId(userId) {
+  const active = getActiveFamilyId();
+  if (active) return active;
   const { rows } = await query('SELECT family_id FROM family_members WHERE user_id = $1 LIMIT 1', [userId]);
   return rows[0]?.family_id ?? null;
 }
@@ -87,8 +91,11 @@ function mapTransfer(row) {
   };
 }
 
+// Phase S — familyId rides along (unlike the pre-S shape) so the client's
+// realtime bridge can filter a `budget` WS event against the active family;
+// budgets/tasks/grocery/etc. are the only wire shapes without it before this.
 function mapBudget(row) {
-  return { month: row.month, amount: Number(row.amount) };
+  return { month: row.month, amount: Number(row.amount), familyId: row.family_id };
 }
 
 function mapCategory(row) {
@@ -253,7 +260,7 @@ export async function setBudget({ month, amount, userId }) {
     [familyId, targetMonth, numAmount],
   );
 
-  const budget = { month: targetMonth, amount: numAmount };
+  const budget = { month: targetMonth, amount: numAmount, familyId };
   await broadcastToFamily(familyId, { type: 'budget', action: 'upsert', budget });
   return budget;
 }

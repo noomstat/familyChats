@@ -15,6 +15,7 @@
 // attach the new row) throws 409 'not in a family' instead.
 import { query } from './db.js';
 import { broadcastToFamily } from './ws.js';
+import { getActiveFamilyId } from './requestContext.js';
 
 // Keep in sync with app/src/crypto/e2ee.ts's ENVELOPE_PREFIX (also duplicated
 // in chat.js and family.js — this codebase's convention is a tiny per-module
@@ -48,7 +49,10 @@ function conflict(message) {
   return err;
 }
 
+// Phase S — see lists.js's copy of this helper for the request-context rationale.
 async function userFamilyId(userId) {
+  const active = getActiveFamilyId();
+  if (active) return active;
   const { rows } = await query('SELECT family_id FROM family_members WHERE user_id = $1 LIMIT 1', [userId]);
   return rows[0]?.family_id ?? null;
 }

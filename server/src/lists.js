@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 import { query } from './db.js';
 import { broadcastToFamily } from './ws.js';
 import { notifyUsers } from './notifications.js';
+import { getActiveFamilyId } from './requestContext.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const RECURRENCE_VALUES = new Set(['weekly', 'monthly']);
@@ -42,7 +43,13 @@ function conflict(message) {
   return err;
 }
 
+// Phase S — prefer the request-scoped active family (set by server.js's
+// resolveFamily middleware, always pre-verified as one of this user's
+// memberships); fall back to the DB LIMIT-1 lookup for callers with no
+// request context (workers, scripts) or when the context is unset (null).
 async function userFamilyId(userId) {
+  const active = getActiveFamilyId();
+  if (active) return active;
   const { rows } = await query('SELECT family_id FROM family_members WHERE user_id = $1 LIMIT 1', [userId]);
   return rows[0]?.family_id ?? null;
 }

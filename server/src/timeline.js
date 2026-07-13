@@ -8,6 +8,7 @@
 // (a handful of indexed SELECTs) and keeps the hot bootstrap/sync payloads
 // from growing with every photo/milestone a family ever accumulates.
 import { query } from './db.js';
+import { getActiveFamilyId } from './requestContext.js';
 
 // A member who joined within this many ms of the family's creation is
 // considered a "founding member" — bundled into one "Founded by ..." item
@@ -36,7 +37,10 @@ function joinNames(names) {
   return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
 }
 
+// Phase S — see lists.js's copy of this helper for the request-context rationale.
 async function userFamilyId(userId) {
+  const active = getActiveFamilyId();
+  if (active) return active;
   const { rows } = await query('SELECT family_id FROM family_members WHERE user_id = $1 LIMIT 1', [userId]);
   return rows[0]?.family_id ?? null;
 }

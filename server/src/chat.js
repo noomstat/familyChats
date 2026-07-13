@@ -11,6 +11,7 @@ import { listAlbums } from './albums.js';
 import { getFinance, listCategories } from './finance.js';
 import { listKeyRolls } from './family.js';
 import { listNotes } from './notes.js';
+import { getActiveFamilyId } from './requestContext.js';
 
 const DEFAULT_MESSAGE_LIMIT = 30;
 
@@ -55,7 +56,10 @@ function mapMessage(row) {
   };
 }
 
+// Phase S — see lists.js's copy of this helper for the request-context rationale.
 async function userFamilyId(userId) {
+  const active = getActiveFamilyId();
+  if (active) return active;
   const { rows } = await query('SELECT family_id FROM family_members WHERE user_id = $1 LIMIT 1', [userId]);
   return rows[0]?.family_id ?? null;
 }
