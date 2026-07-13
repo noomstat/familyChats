@@ -1,21 +1,37 @@
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Share, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { semantic, fontFamily, fontSize, space, radius } from '../theme';
 import { Button, Card, Icon, Input } from '../components/core';
 import { PinMark } from '../components/brand/PinMark';
 import { useActions } from '../store';
 import { buildExtendedInvite, parseInvite } from '../crypto/e2ee';
+import type { FamilyStackParamList } from '../navigation/types';
 
-/** Shown once a user is signed in but hasn't joined/created a Family Space yet.
- * Family Space is invite-only (v1: one family per user) — there's no browse/discover.
+/**
+ * Shown when a signed-in user has no Family Space yet (App.tsx's Gate), AND
+ * reachable (Phase S) as "add another family" from an already-in-a-family
+ * user via the FamilyHub/YouScreen switcher's AddFamily route — see
+ * AddFamilyScreen below, which wraps this in `mode="add"`. Family Space is
+ * still invite-only — there's no browse/discover — but a user may now belong
+ * to several.
  *
  * `onCreatedWithKey` fires right after a brand-new family is created (which is
  * E2EE by default — see AppStore's createFamily) with its extended invite, so
- * the caller (App.tsx's Gate) can hold the "save your key" step open — once
- * this component's parent stops rendering it (family is no longer null), the
- * key can never be shown again. */
-export function FamilyGateScreen({ onCreatedWithKey }: { onCreatedWithKey?: (invite: string) => void }) {
+ * the caller can hold a "save your key" step open — once the invite string is
+ * gone, the key can never be shown again. `onJoined` fires after a successful
+ * join (no key step needed there — see AddFamilyScreen).
+ */
+export function FamilyGateScreen({
+  mode = 'onboarding',
+  onCreatedWithKey,
+  onJoined,
+}: {
+  mode?: 'onboarding' | 'add';
+  onCreatedWithKey?: (invite: string) => void;
+  onJoined?: () => void;
+}) {
   const actions = useActions();
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -42,6 +58,7 @@ export function FamilyGateScreen({ onCreatedWithKey }: { onCreatedWithKey?: (inv
     try {
       const parsed = parseInvite(code);
       await actions.joinFamily(parsed.code, parsed.keyB64);
+      onJoined?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not join with that code');
     } finally {
@@ -55,9 +72,13 @@ export function FamilyGateScreen({ onCreatedWithKey }: { onCreatedWithKey?: (inv
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 24, paddingBottom: 32, gap: space[4] }} keyboardShouldPersistTaps="handled">
           <View style={{ alignItems: 'center', gap: 8, marginBottom: space[2] }}>
             <PinMark size={40} />
-            <Text style={{ fontFamily: fontFamily.display, fontSize: 24, color: semantic.textStrong }}>Find your family</Text>
+            <Text style={{ fontFamily: fontFamily.display, fontSize: 24, color: semantic.textStrong }}>
+              {mode === 'add' ? 'Add another family' : 'Find your family'}
+            </Text>
             <Text style={{ fontFamily: fontFamily.body, fontSize: fontSize.bodySm, color: semantic.textMuted, textAlign: 'center', paddingHorizontal: 12 }}>
-              FamilyChats is invite-only. Start a new family space, or join one with an invite code from someone already in it.
+              {mode === 'add'
+                ? 'Start a new family space, or join one with an invite code — the new family becomes your active one.'
+                : 'FamilyChats is invite-only. Start a new family space, or join one with an invite code from someone already in it.'}
             </Text>
           </View>
 
@@ -151,4 +172,24 @@ export function SaveFamilyKeyScreen({ invite, onDone }: { invite: string; onDone
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+type AddFamilyProps = NativeStackScreenProps<FamilyStackParamList, 'AddFamily'>;
+
+/**
+ * Phase S — navigable "add another family" entry point (FamilyHub's switcher,
+ * YouScreen's families section), reusing FamilyGateScreen's create/join forms
+ * for a user who already belongs to at least one family. createFamily/
+ * joinFamily both make the new family active immediately (see AppStore.tsx),
+ * so on success this just needs to get out of the way: a join pops straight
+ * back, a create holds the one-time "save your key" step open first (same as
+ * onboarding's SaveFamilyKeyScreen) before popping back.
+ */
+export function AddFamilyScreen({ navigation }: AddFamilyProps) {
+  const [pendingInvite, setPendingInvite] = useState<string | null>(null);
+
+  if (pendingInvite) {
+    return <SaveFamilyKeyScreen invite={pendingInvite} onDone={() => navigation.goBack()} />;
+  }
+  return <FamilyGateScreen mode="add" onCreatedWithKey={setPendingInvite} onJoined={() => navigation.goBack()} />;
 }

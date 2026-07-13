@@ -22,6 +22,11 @@ export type FamilyStackParamList = {
   Album: { albumId: string; name: string };
   Memories: undefined;
   Finance: undefined;
+  // Phase S — "add another family" (create/join), reachable from the
+  // FamilyHub switcher even when the user already belongs to one or more
+  // families (unlike App.tsx's Gate, which only renders FamilyGateScreen
+  // outside the tab navigator for a family-less user).
+  AddFamily: undefined;
 };
 
 export type RootTabParamList = {

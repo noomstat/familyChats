@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Share, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { semantic, fontFamily, fontSize, radius } from '../theme';
 import { Icon, Switch, Card, Badge, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { useActions, useFamily, useSession } from '../store';
+import { useActions, useFamilies, useFamily, useSession } from '../store';
+import type { FamilyState } from '../store';
 import { keyStorage } from '../store/keyStorage';
 import { buildExtendedInvite } from '../crypto/e2ee';
+import type { RootTabParamList } from '../navigation/types';
 
 const ROWS: [string, string, 'toggle' | 'chev'][] = [
   ['navigation', 'Share live by default', 'toggle'],
@@ -19,7 +23,9 @@ export function YouScreen() {
   const [live, setLive] = useState(true);
   const session = useSession();
   const family = useFamily();
+  const families = useFamilies();
   const actions = useActions();
+  const navigation = useNavigation<BottomTabNavigationProp<RootTabParamList>>();
 
   const displayName = session?.name ?? 'You';
 
@@ -34,6 +40,13 @@ export function YouScreen() {
             {family ? ` · ${family.name} · ${family.inviteCode}` : ''}
           </Text>
         </View>
+
+        <FamiliesCard
+          families={families}
+          activeId={family?.id ?? null}
+          onSwitch={(id) => actions.switchFamily(id).catch((err) => console.warn('[YouScreen] switchFamily failed', err))}
+          onAdd={() => navigation.navigate('Family', { screen: 'AddFamily' })}
+        />
 
         {family && <E2EECard family={family} />}
 
@@ -87,6 +100,103 @@ export function YouScreen() {
 }
 
 type Family = NonNullable<ReturnType<typeof useFamily>>;
+
+/**
+ * Phase S — every family the session user belongs to, with a tap-to-switch
+ * row per family (active one checked) and an "Add another family" row that
+ * deep-links into the Family tab's AddFamily route (this screen lives outside
+ * the FamilyStack, hence the cross-tab navigate rather than a plain push).
+ * Hidden entirely for a family-less account (nothing to switch between yet —
+ * App.tsx's Gate already covers that onboarding case).
+ */
+function FamiliesCard({
+  families,
+  activeId,
+  onSwitch,
+  onAdd,
+}: {
+  families: FamilyState[];
+  activeId: string | null;
+  onSwitch: (id: string) => void;
+  onAdd: () => void;
+}) {
+  const [switching, setSwitching] = useState<string | null>(null);
+
+  const switchTo = (id: string) => {
+    if (id === activeId) return;
+    setSwitching(id);
+    onSwitch(id);
+    // No completion signal is threaded back from the fire-and-forget
+    // onSwitch — clear the spinner optimistically once the store's own
+    // switchFamily promise has had a moment to land (mirrors the codebase's
+    // other fire-and-warn action patterns, e.g. addExpense/addGrocery).
+    setTimeout(() => setSwitching(null), 1500);
+  };
+
+  if (!families.length) return null;
+
+  return (
+    <Card padding="none" style={{ overflow: 'hidden', marginBottom: 16 }}>
+      <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 }}>
+        <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>Families</Text>
+      </View>
+      {families.map((f, i) => {
+        const active = f.id === activeId;
+        return (
+          <Pressable
+            key={f.id}
+            onPress={() => switchTo(f.id)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 12,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderTopWidth: i ? 1 : 0,
+              borderTopColor: semantic.borderSubtle,
+            }}
+          >
+            <View style={{ width: 34, height: 34, borderRadius: radius.sm, backgroundColor: semantic.surfaceSunk, alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="home" size={17} color={active ? semantic.brand : semantic.textBody} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{f.name}</Text>
+              <Text style={{ fontSize: 12, color: semantic.textMuted, marginTop: 1 }}>
+                {f.members.length} {f.members.length === 1 ? 'member' : 'members'} · {f.role}
+              </Text>
+            </View>
+            {switching === f.id ? (
+              <ActivityIndicator size="small" color={semantic.textMuted} />
+            ) : active ? (
+              <Badge tone="brand" size="sm">
+                Active
+              </Badge>
+            ) : null}
+          </Pressable>
+        );
+      })}
+      <Pressable
+        onPress={onAdd}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+          paddingVertical: 12,
+          paddingHorizontal: 16,
+          borderTopWidth: 1,
+          borderTopColor: semantic.borderSubtle,
+        }}
+      >
+        <View style={{ width: 34, height: 34, borderRadius: radius.sm, backgroundColor: semantic.surfaceSunk, alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name="plus" size={17} color={semantic.brand} />
+        </View>
+        <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, color: semantic.brand, fontSize: 15 }}>
+          Create or join another family
+        </Text>
+      </Pressable>
+    </Card>
+  );
+}
 
 /**
  * Phase M — e2ee status card. Encryption is always on for every family (no

@@ -1,11 +1,22 @@
-import React from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, semantic, fontFamily, radius } from '../theme';
 import { Icon, Badge, Card } from '../components/core';
 import { PinMark } from '../components/brand/PinMark';
-import { thb, useAlbums, useEvents, useFamily, useFinance, useGrocery, useNotes, useTasks } from '../store';
+import {
+  thb,
+  useActions,
+  useAlbums,
+  useEvents,
+  useFamilies,
+  useFamily,
+  useFinance,
+  useGrocery,
+  useNotes,
+  useTasks,
+} from '../store';
 import type { FamilyStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'FamilyHub'>;
@@ -24,6 +35,10 @@ interface HubTile {
 // Phase H — every tile is live.
 export function FamilyHubScreen({ navigation }: Props) {
   const family = useFamily();
+  const families = useFamilies();
+  const actions = useActions();
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [switching, setSwitching] = useState<string | null>(null);
   const grocery = useGrocery();
   const tasks = useTasks();
   const events = useEvents();
@@ -104,20 +119,107 @@ export function FamilyHubScreen({ navigation }: Props) {
     },
   ];
 
+  // Phase S — switching sets AppStore's active family + re-bootstraps; the
+  // panel closes once the store confirms the switch (or immediately on a
+  // no-op tap of the already-active family).
+  const switchTo = async (id: string) => {
+    if (id === family?.id) {
+      setSwitcherOpen(false);
+      return;
+    }
+    setSwitching(id);
+    try {
+      await actions.switchFamily(id);
+    } catch (err) {
+      console.warn('[FamilyHub] switchFamily failed', err);
+    } finally {
+      setSwitching(null);
+      setSwitcherOpen(false);
+    }
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top']}>
       <View style={{ paddingHorizontal: 16, paddingTop: 6, paddingBottom: 14 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+        <Pressable
+          onPress={() => setSwitcherOpen((v) => !v)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}
+        >
           <PinMark size={30} />
-          <View style={{ minWidth: 0 }}>
-            <Text style={{ fontFamily: fontFamily.display, fontSize: 24, letterSpacing: -0.6, color: semantic.textStrong }}>
-              {family?.name ?? 'Family'}
-            </Text>
+          <View style={{ minWidth: 0, flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontFamily: fontFamily.display, fontSize: 24, letterSpacing: -0.6, color: semantic.textStrong }}>
+                {family?.name ?? 'Family'}
+              </Text>
+              {families.length > 1 && (
+                <Icon name={switcherOpen ? 'chevron-up' : 'chevron-down'} size={18} color={semantic.textMuted} />
+              )}
+            </View>
             <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted }}>
               {family ? `${family.members.length} members · ${family.inviteCode}` : ''}
             </Text>
           </View>
-        </View>
+        </Pressable>
+
+        {switcherOpen && (
+          <Card padding="none" style={{ overflow: 'hidden', marginTop: 10 }}>
+            {families.map((f, i) => {
+              const active = f.id === family?.id;
+              return (
+                <Pressable
+                  key={f.id}
+                  onPress={() => switchTo(f.id)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 10,
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    borderTopWidth: i ? 1 : 0,
+                    borderTopColor: semantic.borderSubtle,
+                  }}
+                >
+                  <Icon name="home" size={16} color={active ? semantic.brand : semantic.textMuted} />
+                  <Text
+                    style={{
+                      flex: 1,
+                      fontFamily: active ? fontFamily.bodySemibold : fontFamily.body,
+                      fontSize: 14,
+                      color: active ? semantic.textStrong : semantic.textBody,
+                    }}
+                  >
+                    {f.name}
+                  </Text>
+                  {switching === f.id ? (
+                    <ActivityIndicator size="small" color={semantic.textMuted} />
+                  ) : active ? (
+                    <Icon name="check" size={16} color={semantic.brand} />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+            <Pressable
+              onPress={() => {
+                setSwitcherOpen(false);
+                navigation.navigate('AddFamily');
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                borderTopWidth: 1,
+                borderTopColor: semantic.borderSubtle,
+              }}
+            >
+              <Icon name="plus" size={16} color={semantic.brand} />
+              <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 14, color: semantic.brand }}>
+                Create or join another family
+              </Text>
+            </Pressable>
+          </Card>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>

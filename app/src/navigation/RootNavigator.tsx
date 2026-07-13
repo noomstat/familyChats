@@ -19,6 +19,7 @@ import {
   AlbumScreen,
   MemoriesScreen,
   FinanceScreen,
+  AddFamilyScreen,
 } from '../screens';
 import type { ChatsStackParamList, FamilyStackParamList, RootTabParamList } from './types';
 
@@ -61,6 +62,7 @@ function FamilyNavigator() {
       <FamilyStack.Screen name="Album" component={AlbumScreen} />
       <FamilyStack.Screen name="Memories" component={MemoriesScreen} />
       <FamilyStack.Screen name="Finance" component={FinanceScreen} />
+      <FamilyStack.Screen name="AddFamily" component={AddFamilyScreen} options={{ presentation: 'modal' }} />
     </FamilyStack.Navigator>
   );
 }
