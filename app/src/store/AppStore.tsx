@@ -213,18 +213,22 @@ export function fromServerMessage(sm: ServerMessage): Message {
   if (isEnvelope(sm.body)) {
     // v1 is one family per user, so "the" cached key (if any) is always the
     // right one to try — no groupId -> familyId lookup available here anyway.
+    const cipher = sm.body as string;
     const keyB64 = familyKeyCache?.keyB64;
-    const decrypted = keyB64 ? decryptPayload(keyB64, sm.body as string) : null;
+    const decrypted = keyB64 ? decryptPayload(keyB64, cipher) : null;
     if (decrypted) {
       return {
         ...base,
+        cipher,
         text: decrypted.text,
         loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
         live: decrypted.loc?.live,
       };
     }
-    // No key yet, or decrypt failed (tamper/wrong key) — render locked.
-    return { ...base, locked: true };
+    // No key yet, or decrypt failed (tamper/wrong key) — render locked. The
+    // envelope is kept as `cipher` either way so a later REDECRYPT pass (once
+    // a key loads) or a cold hydrate-from-storage can still try again.
+    return { ...base, cipher, locked: true };
   }
 
   return {
@@ -245,6 +249,7 @@ type Action =
   | { type: 'HYDRATE'; payload: Persisted | null }
   | { type: 'BOOTSTRAP'; payload: BootstrapResponse }
   | { type: 'MERGE_MESSAGES'; messages: Message[] }
+  | { type: 'REDECRYPT'; keyB64: string }
   | { type: 'MERGE_READ'; groupId: string; userId: string; ts: number }
   | { type: 'GROUP_UPSERT'; group: ChatGroup }
   | { type: 'GROUP_REMOVE'; groupId: string }
@@ -387,6 +392,37 @@ function reducer(state: AppState, action: Action): AppState {
         if (bump) unread = { ...unread, [groupId]: (unread[groupId] ?? 0) + bump };
       }
       return { ...state, messages, unread };
+    }
+
+    // Phase L — re-maps every locked message holding a `cipher` through
+    // decryptPayload now that `keyB64` is available (see the key-load
+    // effect below). Pure/synchronous/no network — this is what lets a
+    // cold hydrate-from-storage (where E2EE messages are persisted as
+    // ciphertext-only, never plaintext) come back readable offline as soon
+    // as the family key loads from local keyStorage. Messages that fail to
+    // decrypt (still no key, wrong key, tamper) are left untouched.
+    case 'REDECRYPT': {
+      let changed = false;
+      const messages: Record<string, Message[]> = {};
+      for (const [groupId, msgs] of Object.entries(state.messages)) {
+        let groupChanged = false;
+        const next = msgs.map((m) => {
+          if (!m.locked || !m.cipher) return m;
+          const decrypted = decryptPayload(action.keyB64, m.cipher);
+          if (!decrypted) return m;
+          groupChanged = true;
+          return {
+            ...m,
+            locked: undefined,
+            text: decrypted.text,
+            loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
+            live: decrypted.loc?.live,
+          };
+        });
+        messages[groupId] = groupChanged ? next : msgs;
+        if (groupChanged) changed = true;
+      }
+      return changed ? { ...state, messages } : state;
     }
 
     case 'MERGE_READ': {
@@ -640,10 +676,28 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   // Persist on every change once hydrated. Session/family are deliberately
   // excluded — they're re-derived from the secure-store token (below), never
   // cached in this AsyncStorage blob.
+  //
+  // Phase L — E2EE messages must never hit AsyncStorage/localStorage
+  // decrypted: any message holding a `cipher` (its wire body was an
+  // envelope — see fromServerMessage) is stripped down to ciphertext +
+  // metadata only (id/groupId/authorId/kind/ts/cipher, forced `locked:
+  // true`) before it's serialized, same as if we'd never had the key. The
+  // REDECRYPT reducer action re-maps these back through decryptPayload the
+  // next time familyKeyCache is populated (see the key-load effect below) —
+  // that's what keeps offline reads working despite storage holding only
+  // ciphertext.
   useEffect(() => {
     if (!state.hydrated) return;
     const { hydrated: _hydrated, session: _session, family: _family, sessionReady: _sessionReady, hasFamilyKey: _hasFamilyKey, ...persisted } = state;
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(persisted)).catch(() => {});
+    const messages: Record<string, Message[]> = {};
+    for (const [groupId, msgs] of Object.entries(persisted.messages)) {
+      messages[groupId] = msgs.map((m) =>
+        m.cipher
+          ? { id: m.id, groupId: m.groupId, authorId: m.authorId, kind: m.kind, ts: m.ts, cipher: m.cipher, locked: true }
+          : m,
+      );
+    }
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ ...persisted, messages })).catch(() => {});
   }, [state]);
 
   // Load the session token once on mount and, if present, hydrate session+family
@@ -713,6 +767,13 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         }
         familyKeyCache = { familyId, keyB64 };
         dispatch({ type: 'SET_HAS_KEY', value: true });
+        // Phase L — messages hydrated from storage (persisted as
+        // ciphertext-only, see the persist effect above) come back `locked`
+        // regardless of whether we held the key last session. Re-map them
+        // through decryptPayload right away — synchronous, no network — so
+        // offline reads work even if the bootstrap re-fetch below never
+        // completes (no connectivity).
+        dispatch({ type: 'REDECRYPT', keyB64 });
         const token = state.session?.token;
         if (token) {
           getBootstrap(token)

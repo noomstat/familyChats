@@ -28,6 +28,14 @@ export interface Message {
    * (no family key yet, or the wrong one). `text`/`loc` are left undefined —
    * the thread renders a locked bubble instead of the raw ciphertext. */
   locked?: boolean;
+  /** Phase L — set whenever the wire body was an E2EE envelope (`e2e:1:…`),
+   * regardless of whether it decrypted successfully. This is the ONLY form
+   * of an encrypted message the persist layer is allowed to write to disk —
+   * see AppStore.tsx's persist effect, which strips `text`/`loc`/`live` from
+   * any message holding a `cipher` before it ever reaches AsyncStorage/
+   * localStorage. Also what the REDECRYPT reducer action re-maps through
+   * decryptPayload once a family key becomes available. */
+  cipher?: string;
   ts: number;
 }
 
