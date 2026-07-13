@@ -10,11 +10,13 @@
 // (addGrocery/addTask/clearChecked) throw 409 'not in a family' instead —
 // there's nothing wrong with the request shape (unlike a 400), the caller's
 // account just isn't in a state that allows it yet.
+import crypto from 'node:crypto';
 import { query } from './db.js';
 import { broadcastToFamily } from './ws.js';
 import { notifyUsers } from './notifications.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const RECURRENCE_VALUES = new Set(['weekly', 'monthly']);
 
 function notFound(message) {
   const err = new Error(message);
@@ -54,6 +56,32 @@ function dateOnly(d) {
   return `${y}-${m}-${day}`;
 }
 
+function validateRecurrence(value) {
+  if (value === null || value === undefined) return null;
+  if (!RECURRENCE_VALUES.has(value)) throw badRequest("recurrence must be 'weekly' or 'monthly'");
+  return value;
+}
+
+/** 'YYYY-MM-DD' -> 'YYYY-MM-DD', 7 days later. Built from local Date fields (never toISOString) to avoid any UTC shift. */
+function addWeek(dateOnlyStr) {
+  const [y, m, d] = dateOnlyStr.split('-').map(Number);
+  return dateOnly(new Date(y, m - 1, d + 7));
+}
+
+/**
+ * 'YYYY-MM-DD' -> 'YYYY-MM-DD', one calendar month later, clamping the day to
+ * the target month's length (e.g. Jan 31 + 1mo -> Feb 28/29, not Mar 3).
+ */
+function addMonth(dateOnlyStr) {
+  const [y, m, d] = dateOnlyStr.split('-').map(Number);
+  const targetMonth0 = m; // m is 1-based; +1 month, 0-based, e.g. Jan(1) -> Feb index 1
+  const targetYear = y + Math.floor(targetMonth0 / 12);
+  const normMonth0 = ((targetMonth0 % 12) + 12) % 12;
+  const daysInTargetMonth = new Date(targetYear, normMonth0 + 1, 0).getDate(); // day 0 of next month = last day of target month
+  const day = Math.min(d, daysInTargetMonth);
+  return dateOnly(new Date(targetYear, normMonth0, day));
+}
+
 function mapGrocery(row) {
   return {
     id: row.id,
@@ -80,6 +108,7 @@ function mapTask(row) {
     doneAt: row.done_at ? row.done_at.toISOString() : null,
     createdBy: row.created_by,
     ts: row.ts.toISOString(),
+    recurrence: row.recurrence ?? null,
   };
 }
 
@@ -188,10 +217,11 @@ export async function listTasks(userId) {
  * insert and, if assigned to someone other than the creator, enqueues a
  * "New task" push to the assignee.
  */
-export async function addTask({ id, title, notes, assigneeId, dueDate, userId }) {
+export async function addTask({ id, title, notes, assigneeId, dueDate, recurrence, userId }) {
   if (!id) throw badRequest('id is required');
   if (typeof title !== 'string' || !title.trim()) throw badRequest('title is required');
   if (dueDate != null && !DATE_RE.test(dueDate)) throw badRequest('dueDate must be YYYY-MM-DD');
+  const recurrenceValue = validateRecurrence(recurrence);
 
   const familyId = await userFamilyId(userId);
   if (!familyId) throw conflict('not in a family');
@@ -202,11 +232,11 @@ export async function addTask({ id, title, notes, assigneeId, dueDate, userId })
   }
 
   const { rows } = await query(
-    `INSERT INTO tasks (id, family_id, title, notes, assignee_id, due_date, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tasks (id, family_id, title, notes, assignee_id, due_date, recurrence, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (id) DO NOTHING
      RETURNING *`,
-    [id, familyId, title.trim(), notes ?? null, assigneeId ?? null, dueDate ?? null, userId],
+    [id, familyId, title.trim(), notes ?? null, assigneeId ?? null, dueDate ?? null, recurrenceValue, userId],
   );
 
   if (!rows[0]) {
@@ -261,6 +291,9 @@ export async function updateTask({ id, patch, userId }) {
     if (patch.dueDate !== null && !DATE_RE.test(patch.dueDate)) throw badRequest('dueDate must be YYYY-MM-DD');
     addSet('due_date', patch.dueDate);
   }
+  if (patch.recurrence !== undefined) {
+    addSet('recurrence', validateRecurrence(patch.recurrence));
+  }
 
   if (!sets.length) return mapTask(task); // no-op patch
 
@@ -270,7 +303,14 @@ export async function updateTask({ id, patch, userId }) {
   return updated;
 }
 
-/** Flips done <-> open (setting/clearing done_by + done_at). */
+/**
+ * Flips done <-> open (setting/clearing done_by + done_at). If the task being
+ * marked done carries a recurrence, also spawns a fresh open task (its own
+ * id) copying title/notes/assignee/recurrence, with due_date advanced +7d
+ * (weekly) or +1 calendar month (monthly) from the completed task's due date
+ * (or from today if it had none). The completed instance is left as history.
+ * Toggling a done recurring task back to open does NOT spawn anything.
+ */
 export async function toggleTask({ id, userId }) {
   const task = await assertTaskAccess(id, userId);
   const done = !task.done;
@@ -284,6 +324,21 @@ export async function toggleTask({ id, userId }) {
 
   const updated = mapTask(rows[0]);
   await broadcastToFamily(task.family_id, { type: 'task', action: 'upsert', task: updated });
+
+  if (done && task.recurrence) {
+    const baseDueDate = updated.dueDate ?? dateOnly(new Date());
+    const nextDueDate = task.recurrence === 'weekly' ? addWeek(baseDueDate) : addMonth(baseDueDate);
+
+    const { rows: spawnedRows } = await query(
+      `INSERT INTO tasks (id, family_id, title, notes, assignee_id, due_date, recurrence, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [crypto.randomUUID(), task.family_id, task.title, task.notes, task.assignee_id, nextDueDate, task.recurrence, task.created_by],
+    );
+    const spawned = mapTask(spawnedRows[0]);
+    await broadcastToFamily(task.family_id, { type: 'task', action: 'upsert', task: spawned });
+  }
+
   return updated;
 }
 

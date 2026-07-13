@@ -373,8 +373,8 @@ app.get('/tasks', requireAuth, async (req, res, next) => {
 
 app.post('/tasks', requireAuth, async (req, res, next) => {
   try {
-    const { id, title, notes, assigneeId, dueDate } = req.body ?? {};
-    const task = await addTask({ id, title, notes, assigneeId, dueDate, userId: req.user.id });
+    const { id, title, notes, assigneeId, dueDate, recurrence } = req.body ?? {};
+    const task = await addTask({ id, title, notes, assigneeId, dueDate, recurrence, userId: req.user.id });
     res.status(201).json({ task });
   } catch (err) {
     next(err);
@@ -383,8 +383,8 @@ app.post('/tasks', requireAuth, async (req, res, next) => {
 
 app.patch('/tasks/:id', requireAuth, async (req, res, next) => {
   try {
-    const { title, notes, assigneeId, dueDate } = req.body ?? {};
-    const task = await updateTask({ id: req.params.id, patch: { title, notes, assigneeId, dueDate }, userId: req.user.id });
+    const { title, notes, assigneeId, dueDate, recurrence } = req.body ?? {};
+    const task = await updateTask({ id: req.params.id, patch: { title, notes, assigneeId, dueDate, recurrence }, userId: req.user.id });
     res.json({ task });
   } catch (err) {
     next(err);
