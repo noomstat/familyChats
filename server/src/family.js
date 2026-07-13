@@ -1,6 +1,10 @@
 // Family Space: create/join by invite code, membership listing, code rotation.
-// One family per user in v1 — callers are expected to check getFamilyForUser
-// before offering "create" or "join" again.
+// Phase S — a user may belong to multiple families; listFamiliesForUser
+// returns all of them, and the "active" one for any given request is
+// resolved by server.js's resolveFamily middleware (see requestContext.js).
+// getFamilyForUser is kept for callers that only care about a single
+// (first-joined) family — e.g. as a DB fallback when there's no request
+// context at all.
 import crypto from 'node:crypto';
 import { pool, query } from './db.js';
 import { broadcastToFamily } from './ws.js';
@@ -80,7 +84,7 @@ export async function createFamily({ name, userId }) {
     client.release();
   }
 
-  return getFamilyForUser(userId);
+  return getFamilyByIdForUser(familyId, userId);
 }
 
 /** Join a family by invite code. Idempotent if the user is already a member. */
@@ -108,12 +112,15 @@ export async function joinFamily({ code, userId }) {
     await broadcastToFamily(family.id, { type: 'family', action: 'members', familyId: family.id, members });
   }
 
-  return getFamilyForUser(userId);
+  return getFamilyByIdForUser(family.id, userId);
 }
 
 /**
- * The family a user belongs to (v1: at most one), with its member list, or
- * null if the user hasn't joined/created one yet.
+ * A user's first-joined family (by joined_at), with its member list, or null
+ * if they haven't joined/created one yet. Kept for single-family callers and
+ * as a DB fallback when there's no request context to resolve an "active"
+ * family from (see requestContext.js). For a specific family, prefer
+ * getFamilyByIdForUser; for all of a user's families, use listFamiliesForUser.
  */
 export async function getFamilyForUser(userId) {
   const { rows } = await query(
@@ -132,6 +139,49 @@ export async function getFamilyForUser(userId) {
     family: { id: row.id, name: row.name, inviteCode: row.invite_code, role: row.role, e2ee: row.e2ee },
     members,
   };
+}
+
+/** A specific family (by id), shaped like getFamilyForUser's result — but only if `userId` is a member of it. Returns null otherwise (unknown id or not a member, indistinguishable to the caller). */
+export async function getFamilyByIdForUser(familyId, userId) {
+  const { rows } = await query(
+    `SELECT f.id, f.name, f.invite_code, f.e2ee, fm.role
+     FROM family_members fm JOIN families f ON f.id = fm.family_id
+     WHERE fm.family_id = $1 AND fm.user_id = $2`,
+    [familyId, userId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+
+  const members = await memberRows(row.id);
+  return {
+    family: { id: row.id, name: row.name, inviteCode: row.invite_code, role: row.role, e2ee: row.e2ee },
+    members,
+  };
+}
+
+/**
+ * Every family `userId` belongs to (Phase S — a user may have several),
+ * oldest membership first, each shaped exactly like getFamilyForUser's
+ * result (`{ family, members }`). Empty array if the user has none.
+ */
+export async function listFamiliesForUser(userId) {
+  const { rows } = await query(
+    `SELECT f.id, f.name, f.invite_code, f.e2ee, fm.role
+     FROM family_members fm JOIN families f ON f.id = fm.family_id
+     WHERE fm.user_id = $1
+     ORDER BY fm.joined_at ASC`,
+    [userId],
+  );
+
+  const out = [];
+  for (const row of rows) {
+    const members = await memberRows(row.id);
+    out.push({
+      family: { id: row.id, name: row.name, inviteCode: row.invite_code, role: row.role, e2ee: row.e2ee },
+      members,
+    });
+  }
+  return out;
 }
 
 // Phase N — E2EE envelope prefix, kept in sync with chat.js's own copy (and
