@@ -109,6 +109,23 @@ export function getFamilyMembers(token: string) {
   return api<{ members: FamilyMember[] }>('/families/members', { token });
 }
 
+// ── Phase N: E2EE key rotation ──────────────────────────────
+
+export interface KeyRoll {
+  id: string;
+  familyId: string;
+  /** e2e:1: envelope: the new family key, encrypted under the previous active key. */
+  wrapped: string;
+  createdBy: string;
+  /** ISO 8601 timestamp. */
+  createdAt: string;
+}
+
+/** `wrapped` comes from wrapKey() in ../crypto/e2ee.ts — the server only checks its shape, never its contents. */
+export function postKeyRoll(token: string, familyId: string, wrapped: string) {
+  return api<{ roll: KeyRoll }>(`/families/${familyId}/key-rolls`, { method: 'POST', body: { wrapped }, token });
+}
+
 // ── Family Chat ──────────────────────────────────────────────
 
 export interface ServerLoc {
@@ -158,12 +175,16 @@ export interface BootstrapResponse {
   transfers: ServerTransfer[];
   /** The family's current-month budget, or null if never set. */
   budget: ServerBudget | null;
+  /** Phase N — every key roll this family has produced, oldest first. A cold client fixpoint-replays these from its anchor key to rebuild the full ring (see AppStore.tsx's key-load effect). */
+  keyRolls: KeyRoll[];
   serverTime: string;
 }
 
 export interface SyncResponse {
   messages: ServerMessage[];
   reads: { groupId: string; userId: string; lastReadTs: string }[];
+  /** Phase N — key rolls created since `after`, so a member who was offline through a rotation catches up on reconnect (see AppStore.tsx's applyIncomingKeyRolls). */
+  keyRolls: KeyRoll[];
   grocery: ServerGroceryItem[];
   tasks: ServerTask[];
   events: ServerEvent[];

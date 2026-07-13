@@ -127,6 +127,44 @@ export function decryptPayload(keyB64: string, envelope: string): E2eePayload | 
   }
 }
 
+/**
+ * Phase N — try every key in the ring (newest first, since a rotated family
+ * is more likely decrypting with its current key) and return the first
+ * successful decrypt, or null if none of them work. The AEAD auth tag is
+ * what actually identifies "the right key" — there's no key-id riding on
+ * the wire, so trial decryption is the whole mechanism.
+ */
+export function decryptPayloadWithKeys(keys: string[], envelope: string): E2eePayload | null {
+  for (let i = keys.length - 1; i >= 0; i--) {
+    const result = decryptPayload(keys[i], envelope);
+    if (result) return result;
+  }
+  return null;
+}
+
+// ── key rotation: wrap/unwrap a whole key under another key ───
+//
+// A "key roll" is the same e2e:1: envelope shape as a message, except the
+// plaintext JSON is `{k: <new key, base64>}` instead of `{text, loc}`. This
+// keeps rotation on the exact same wire format/decrypt path (server sees
+// nothing but an opaque ciphertext string either way) without needing a
+// second envelope version.
+
+interface WrappedKeyPayload {
+  k: string;
+}
+
+/** Encrypts `newKeyB64` under `prevKeyB64`, producing the `wrapped` blob for POST /families/:id/key-rolls. */
+export async function wrapKey(prevKeyB64: string, newKeyB64: string): Promise<string> {
+  return encryptPayload(prevKeyB64, { k: newKeyB64 } as unknown as E2eePayload);
+}
+
+/** Recovers the wrapped key if `prevKeyB64` unlocks `envelope`, else null (wrong key — try another). */
+export function unwrapKey(prevKeyB64: string, envelope: string): string | null {
+  const payload = decryptPayload(prevKeyB64, envelope) as unknown as WrappedKeyPayload | null;
+  return payload && typeof payload.k === 'string' ? payload.k : null;
+}
+
 // ── extended invite (`CODE#K1.<key>`) ─────────────────────────
 
 /** Builds the shareable extended invite: the plain code + a `#K1.<key>` suffix that never reaches the server. */
