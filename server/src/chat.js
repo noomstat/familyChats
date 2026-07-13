@@ -8,7 +8,7 @@ import { notifyUsers } from './notifications.js';
 import { listGrocery, listTasks } from './lists.js';
 import { listEvents } from './events.js';
 import { listAlbums } from './albums.js';
-import { getFinance } from './finance.js';
+import { getFinance, listCategories } from './finance.js';
 import { listKeyRolls } from './family.js';
 import { listNotes } from './notes.js';
 
@@ -107,6 +107,7 @@ export async function getBootstrap(userId) {
       expenses: [],
       transfers: [],
       budget: null,
+      categories: [],
       keyRolls: [],
       notes: [],
       serverTime: new Date().toISOString(),
@@ -164,6 +165,10 @@ export async function getBootstrap(userId) {
   // riding along in bootstrap like the other (family-scale) lists.
   const albums = await listAlbums(userId);
   const { expenses, transfers, budget } = await getFinance(userId);
+  // Phase R — family's custom expense categories, full list (family-scale,
+  // like grocery/tasks/events) — the 5 built-ins are client-side constants
+  // and never ride here.
+  const categories = await listCategories(userId);
   // Phase N — every key roll the family has ever produced, oldest first, so
   // a cold client can fixpoint-replay the whole rotation chain from its
   // anchor (invite) key. Order doesn't matter to the replay itself, but
@@ -174,7 +179,7 @@ export async function getBootstrap(userId) {
   // dozen rows), so the whole list rides along in bootstrap same as those.
   const notes = await listNotes(userId);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, keyRolls, notes, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, serverTime: new Date().toISOString() };
 }
 
 /**
@@ -197,6 +202,9 @@ export async function getSyncSince(userId, afterIso) {
   const events = await listEvents(userId);
   const albums = await listAlbums(userId);
   const { expenses, transfers, budget } = await getFinance(userId);
+  // Phase R — full resend on every sync, same as grocery/tasks/events/albums
+  // above (family-scale, simplest-correct beats per-row change tracking).
+  const categories = await listCategories(userId);
   // Phase P — full resend on every sync, same as grocery/tasks/events/albums
   // above (family-scale, simplest-correct beats per-row change tracking).
   const notes = await listNotes(userId);
@@ -223,7 +231,7 @@ export async function getSyncSince(userId, afterIso) {
     : { rows: [] };
   const keyRolls = rollRows.map((r) => ({ id: r.id, familyId: r.family_id, wrapped: r.wrapped, createdBy: r.created_by, createdAt: r.created_at.toISOString() }));
 
-  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, notes, serverTime };
+  if (!groupIds.length) return { messages: [], reads: [], keyRolls, grocery, tasks, events, albums, expenses, transfers, budget, categories, notes, serverTime };
 
   const { rows: msgRows } = await query(
     'SELECT * FROM messages WHERE group_id = ANY($1) AND ts > $2 ORDER BY ts ASC',
@@ -245,6 +253,7 @@ export async function getSyncSince(userId, afterIso) {
     expenses,
     transfers,
     budget,
+    categories,
     notes,
     serverTime,
   };

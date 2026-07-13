@@ -45,7 +45,7 @@ import {
   removePhoto,
 } from './src/albums.js';
 import { getTimeline } from './src/timeline.js';
-import { addExpense, removeExpense, addTransfer, setBudget, remind } from './src/finance.js';
+import { addExpense, removeExpense, addTransfer, setBudget, remind, listCategories, addCategory, removeCategory } from './src/finance.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
 
@@ -617,6 +617,36 @@ app.post('/finance/remind', requireAuth, async (req, res, next) => {
     const { toUserId, amount } = req.body ?? {};
     const result = await remind({ toUserId, amount, userId: req.user.id });
     res.status(202).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Custom expense categories (Phase R) ─────────────────────────
+
+app.get('/categories', requireAuth, async (req, res, next) => {
+  try {
+    const categories = await listCategories(req.user.id);
+    res.json({ categories });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/categories', requireAuth, async (req, res, next) => {
+  try {
+    const { id, label, icon, color, income } = req.body ?? {};
+    const category = await addCategory({ id, label, icon, color, income, userId: req.user.id });
+    res.status(201).json({ category });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/categories/:id', requireAuth, async (req, res, next) => {
+  try {
+    const result = await removeCategory({ id: req.params.id, userId: req.user.id });
+    res.json(result);
   } catch (err) {
     next(err);
   }

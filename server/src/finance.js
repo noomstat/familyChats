@@ -20,8 +20,12 @@ import { broadcastToFamily } from './ws.js';
 import { notifyUsers } from './notifications.js';
 import { UPLOADS_DIR } from './uploads.js';
 
-const CATEGORY_IDS = new Set(['food', 'stay', 'trans', 'gear', 'refund']);
+// Kept in sync with the client's built-in CATEGORIES (app/src/store/model.ts)
+// — these five ids are always valid on an expense regardless of what a
+// family's custom expense_categories table holds.
+const BUILTIN_CATEGORY_IDS = new Set(['food', 'stay', 'trans', 'gear', 'refund']);
 const MONTH_RE = /^\d{4}-\d{2}$/;
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 function notFound(message) {
   const err = new Error(message);
@@ -87,6 +91,19 @@ function mapBudget(row) {
   return { month: row.month, amount: Number(row.amount) };
 }
 
+function mapCategory(row) {
+  return {
+    id: row.id,
+    familyId: row.family_id,
+    label: row.label,
+    icon: row.icon,
+    color: row.color,
+    income: row.income,
+    createdBy: row.created_by,
+    ts: row.ts.toISOString(),
+  };
+}
+
 /** Best-effort unlink of an uploaded file by its '/uploads/<name>' path. */
 async function unlinkUpload(filePath) {
   const name = path.basename(filePath ?? '');
@@ -101,6 +118,22 @@ async function assertExpenseAccess(id, userId) {
   const familyId = await userFamilyId(userId);
   if (!familyId || expense.family_id !== familyId) throw forbidden('not a member of this family');
   return expense;
+}
+
+async function assertCategoryAccess(id, userId) {
+  const { rows } = await query('SELECT * FROM expense_categories WHERE id = $1', [id]);
+  const category = rows[0];
+  if (!category) throw notFound('category not found');
+  const familyId = await userFamilyId(userId);
+  if (!familyId || category.family_id !== familyId) throw forbidden('not a member of this family');
+  return category;
+}
+
+/** True if `categoryId` is a built-in, or a custom category belonging to `familyId`. */
+async function isValidCategory(categoryId, familyId) {
+  if (BUILTIN_CATEGORY_IDS.has(categoryId)) return true;
+  const { rowCount } = await query('SELECT 1 FROM expense_categories WHERE id = $1 AND family_id = $2', [categoryId, familyId]);
+  return !!rowCount;
 }
 
 /** Current 'YYYY-MM' in server-local terms (matches the DB's to_char(now(), 'YYYY-MM') seed). */
@@ -125,11 +158,10 @@ export async function getFinance(userId) {
   };
 }
 
-/** Insert an expense (idempotent on `id`). Payer + every splitter must be family members. Broadcasts `expense`/`upsert` on a fresh insert. */
+/** Insert an expense (idempotent on `id`). Payer + every splitter must be family members. `categoryId` must be a built-in or one of this family's custom categories. Broadcasts `expense`/`upsert` on a fresh insert. */
 export async function addExpense({ id, label, categoryId, amount, paidBy, splitAmong, receiptPath, userId }) {
   if (!id) throw badRequest('id is required');
   if (typeof label !== 'string' || !label.trim()) throw badRequest('label is required');
-  if (!CATEGORY_IDS.has(categoryId)) throw badRequest('invalid categoryId');
   const numAmount = Number(amount);
   if (!Number.isFinite(numAmount) || numAmount <= 0) throw badRequest('amount must be a positive number');
   if (!paidBy) throw badRequest('paidBy is required');
@@ -137,6 +169,7 @@ export async function addExpense({ id, label, categoryId, amount, paidBy, splitA
 
   const familyId = await userFamilyId(userId);
   if (!familyId) throw conflict('not in a family');
+  if (!(await isValidCategory(categoryId, familyId))) throw badRequest('invalid categoryId');
 
   const everyone = [...new Set([paidBy, ...splitAmong])];
   const { rows: memberRows } = await query(
@@ -246,4 +279,56 @@ export async function remind({ toUserId, amount, userId }) {
   });
 
   return { ok: true };
+}
+
+// ── Custom expense categories (Phase R) ───────────────────────
+//
+// The 5 built-ins (food/stay/trans/gear/refund) are client-side constants,
+// never stored here — this table only holds what a family adds on top.
+// Same read-vs-write asymmetry as the rest of this file: listCategories
+// degrades to [] for a family-less user; addCategory throws 409 instead.
+
+/** My family's custom categories. Degrades to [] for a family-less user. */
+export async function listCategories(userId) {
+  const familyId = await userFamilyId(userId);
+  if (!familyId) return [];
+  const { rows } = await query('SELECT * FROM expense_categories WHERE family_id = $1 ORDER BY ts ASC', [familyId]);
+  return rows.map(mapCategory);
+}
+
+/** Insert a custom category (idempotent on `id`). Broadcasts `category`/`upsert` on a fresh insert. */
+export async function addCategory({ id, label, icon, color, income, userId }) {
+  if (!id) throw badRequest('id is required');
+  if (typeof label !== 'string' || !label.trim()) throw badRequest('label is required');
+  if (typeof icon !== 'string' || !icon.trim()) throw badRequest('icon is required');
+  if (typeof color !== 'string' || !HEX_COLOR_RE.test(color)) throw badRequest('color must be a #RRGGBB hex string');
+  if (BUILTIN_CATEGORY_IDS.has(id)) throw badRequest('id collides with a built-in category');
+
+  const familyId = await userFamilyId(userId);
+  if (!familyId) throw conflict('not in a family');
+
+  const { rows } = await query(
+    `INSERT INTO expense_categories (id, family_id, label, icon, color, income, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO NOTHING
+     RETURNING *`,
+    [id, familyId, label.trim(), icon.trim(), color, !!income, userId],
+  );
+
+  if (!rows[0]) {
+    const { rows: existing } = await query('SELECT * FROM expense_categories WHERE id = $1', [id]);
+    return existing[0] ? mapCategory(existing[0]) : null;
+  }
+
+  const category = mapCategory(rows[0]);
+  await broadcastToFamily(familyId, { type: 'category', action: 'upsert', category });
+  return category;
+}
+
+/** Deletes a custom category. Past expenses keep their category id (they fall back to a neutral "Other" label client-side). */
+export async function removeCategory({ id, userId }) {
+  const category = await assertCategoryAccess(id, userId);
+  await query('DELETE FROM expense_categories WHERE id = $1', [id]);
+  await broadcastToFamily(category.family_id, { type: 'category', action: 'remove', id });
+  return { id };
 }
