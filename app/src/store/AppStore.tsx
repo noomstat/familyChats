@@ -2083,6 +2083,18 @@ export function useActions() {
        */
       getMyFriendCode: async (): Promise<string> => {
         if (!token) throw new Error('not signed in');
+        // Ensure this device's identity key is published BEFORE asking for the
+        // code. The background identity-ready effect normally does this on
+        // login, but it may not have finished — or may have failed while the
+        // API was briefly unreachable — which is exactly what surfaces as the
+        // server's "no published key yet". Publishing is an idempotent upsert,
+        // and the keypair is generated locally if this device somehow lacks one.
+        let keypair = await identityKeyStorage.get();
+        if (!keypair) {
+          keypair = generateIdentityKeypair();
+          await identityKeyStorage.set(keypair);
+        }
+        await apiPublishKey(token, keypair.pubB64);
         const code = await getFriendCode(token);
         return buildFriendCode({ userId: code.userId, friendToken: code.friendToken, pubKeyB64: code.publicKey });
       },
