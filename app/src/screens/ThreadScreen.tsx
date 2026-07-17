@@ -49,7 +49,6 @@ export function ThreadScreen({ route, navigation }: Props) {
   const [draft, setDraft] = useState('');
   const [sheet, setSheet] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [keySheetOpen, setKeySheetOpen] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -233,15 +232,20 @@ export function ThreadScreen({ route, navigation }: Props) {
         />
 
         {/* composer */}
-        {hasLocked && !hasKey && (
-          <Pressable
-            onPress={() => setKeySheetOpen(true)}
+        {/* Phase Y — pure auto-grant, no manual key entry: this is a passive
+            status line, not a Pressable — it clears itself the moment SOME
+            key-holder's device observes this member and auto-grants (the
+            `family/members` sweep or the next bootstrap), never anything the
+            user has to act on. */}
+        {e2ee && !hasKey && hasLocked && (
+          <View
             style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: semantic.surfaceSunk, borderTopWidth: 1, borderTopColor: semantic.borderSubtle }}
           >
             <Icon name="lock" size={14} color={semantic.textMuted} />
-            <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>Enter your family key to read messages</Text>
-            <Text style={{ fontSize: 12, fontFamily: fontFamily.bodySemibold, color: semantic.brand }}>Enter key</Text>
-          </Pressable>
+            <Text style={{ flex: 1, fontSize: 12, color: semantic.textMuted }}>
+              🔒 Waiting for a family member to grant you access…
+            </Text>
+          </View>
         )}
         {!!micWarning && (
           <Text style={{ fontSize: 12, color: colors.rose500, paddingHorizontal: 16, paddingTop: 6, backgroundColor: semantic.surfaceCard }}>
@@ -288,7 +292,6 @@ export function ThreadScreen({ route, navigation }: Props) {
       </KeyboardAvoidingView>
 
       {sheet && <ShareSheet onClose={() => setSheet(false)} onConfirm={confirmShare} />}
-      {keySheetOpen && <ImportKeySheet onClose={() => setKeySheetOpen(false)} />}
       {settingsOpen && (
         <GroupSettingsSheet
           group={group}
@@ -337,48 +340,6 @@ function ChatMsg({ m, mine, authorName, receipt }: { m: Message; mine: boolean; 
         </Text>
       )}
     </View>
-  );
-}
-
-/** "Enter your family key" sheet — accepts either a full extended invite or a bare pasted key. */
-function ImportKeySheet({ onClose }: { onClose: () => void }) {
-  const actions = useActions();
-  const [input, setInput] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async () => {
-    setError(null);
-    setSubmitting(true);
-    try {
-      await actions.importFamilyKey(input);
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read that key');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}>
-      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
-      <View style={{ backgroundColor: semantic.surfaceCard, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30, gap: 14, ...shadow.xl }}>
-        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Icon name="key" size={20} color={colors.coral500} />
-          <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Enter your family key</Text>
-        </View>
-        <Text style={{ fontSize: 14, lineHeight: 20, color: semantic.textMuted }}>
-          Paste the extended invite (with the {'#'} part) or just the key someone shared with you.
-        </Text>
-        <Input value={input} onChangeText={setInput} placeholder="FAM123#K1.… or just the key" autoCapitalize="none" onSubmitEditing={submit} />
-        {!!error && <Text style={{ fontSize: 13, color: semantic.danger }}>{error}</Text>}
-        <Button block variant="primary" disabled={submitting || !input.trim()} onPress={submit}>
-          {submitting ? 'Unlocking…' : 'Unlock messages'}
-        </Button>
-      </View>
-    </KeyboardAvoidingView>
   );
 }
 

@@ -4,7 +4,7 @@ export { NewChatScreen } from './NewChatScreen';
 export { MapScreen } from './MapScreen';
 export { YouScreen } from './YouScreen';
 export { LoginScreen } from './LoginScreen';
-export { FamilyGateScreen, SaveFamilyKeyScreen, AddFamilyScreen } from './FamilyGateScreen';
+export { FamilyGateScreen, AddFamilyScreen } from './FamilyGateScreen';
 export { FamilyHubScreen } from './FamilyHubScreen';
 export { CalendarScreen } from './CalendarScreen';
 export { GroceryScreen } from './GroceryScreen';

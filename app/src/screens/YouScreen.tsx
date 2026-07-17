@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -9,8 +9,6 @@ import { Icon, Switch, Card, Badge, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { useActions, useFamilies, useFamily, useFriends, useSession } from '../store';
 import type { FamilyState } from '../store';
-import { keyStorage } from '../store/keyStorage';
-import { buildExtendedInvite } from '../crypto/e2ee';
 import type { RootTabParamList } from '../navigation/types';
 
 const ROWS: [string, string, 'toggle' | 'chev'][] = [
@@ -202,29 +200,15 @@ function FamiliesCard({
 /**
  * Phase M — e2ee status card. Encryption is always on for every family (no
  * opt-in, no disable), so this always shows the "encrypted" state: the badge
- * plus the extended invite (re-derived from the locally-stored anchor key,
- * since the server never has it) with a share affordance. Phase N adds an
- * owner-only rotate-key row below it.
+ * plus the plain invite code (Phase Y — no key ever rides along with it) with
+ * a share affordance. Phase N adds an owner-only rotate-key row below it.
  */
 function E2EECard({ family }: { family: Family }) {
-  const [keyB64, setKeyB64] = useState<string | null>(null);
   const [showQr, setShowQr] = useState(false);
   const [showAddMember, setShowAddMember] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    keyStorage.getRing(family.id).then((keys) => {
-      if (!cancelled) setKeyB64(keys?.[0] ?? null); // index 0 = the original invite/anchor key — the invite is always built from that, even post-rotation
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [family.id]);
-
-  const invite = keyB64 ? buildExtendedInvite(family.inviteCode, keyB64) : null;
-
   const share = () => {
-    if (invite) Share.share({ message: `Join our family space on FamilyChats: ${invite}` }).catch(() => {});
+    Share.share({ message: `Join our family space on FamilyChats — invite code: ${family.inviteCode}` }).catch(() => {});
   };
 
   return (
@@ -239,50 +223,42 @@ function E2EECard({ family }: { family: Family }) {
         </Badge>
       </View>
       <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted }}>
-        Messages in this family are readable only on devices that hold the key below. Share it when you invite
-        someone — regenerating the invite code does NOT rotate this key.
+        Encrypted automatically — nothing to share. Anyone who joins with the code below gets access the moment
+        another member's device is online to grant it.
       </Text>
-      {invite ? (
-        <>
-          <View style={{ backgroundColor: semantic.surfaceSunk, borderRadius: radius.md, padding: 12 }}>
-            <Text selectable style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textStrong }}>
-              {invite}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Button
-              size="sm"
-              variant="secondary"
-              leadingIcon={<Icon name="share-2" size={14} color={semantic.textStrong} />}
-              onPress={share}
-              style={{ flex: 1 }}
-            >
-              Share invite
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              leadingIcon={<Icon name="qr-code" size={14} color={semantic.textStrong} />}
-              onPress={() => setShowQr((s) => !s)}
-              style={{ flex: 1 }}
-            >
-              {showQr ? 'Hide QR' : 'Show QR'}
-            </Button>
-          </View>
-          {/* Phase X — a scannable version of the same extended invite, for
-              someone to join with FamilyGateScreen's camera scanner. */}
-          {showQr && (
-            <View style={{ alignItems: 'center', paddingVertical: 8 }}>
-              <View style={{ padding: 16, backgroundColor: colors.white, borderRadius: radius.lg, ...shadow.sm }}>
-                <QRCode value={invite} size={200} />
-              </View>
-            </View>
-          )}
-        </>
-      ) : (
-        <Text style={{ fontSize: fontSize.bodySm, color: semantic.textFaint }}>
-          This device doesn't have the key yet — open a chat to enter it.
+      <View style={{ backgroundColor: semantic.surfaceSunk, borderRadius: radius.md, padding: 12 }}>
+        <Text selectable style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textStrong }}>
+          {family.inviteCode}
         </Text>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Button
+          size="sm"
+          variant="secondary"
+          leadingIcon={<Icon name="share-2" size={14} color={semantic.textStrong} />}
+          onPress={share}
+          style={{ flex: 1 }}
+        >
+          Share invite
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          leadingIcon={<Icon name="qr-code" size={14} color={semantic.textStrong} />}
+          onPress={() => setShowQr((s) => !s)}
+          style={{ flex: 1 }}
+        >
+          {showQr ? 'Hide QR' : 'Show QR'}
+        </Button>
+      </View>
+      {/* Phase Y — a scannable version of the plain invite code (no key), for
+          someone to join with FamilyGateScreen's camera scanner. */}
+      {showQr && (
+        <View style={{ alignItems: 'center', paddingVertical: 8 }}>
+          <View style={{ padding: 16, backgroundColor: colors.white, borderRadius: radius.lg, ...shadow.sm }}>
+            <QRCode value={family.inviteCode} size={200} />
+          </View>
+        </View>
       )}
 
       {/* Phase X — any member can add straight from their friends list (no
