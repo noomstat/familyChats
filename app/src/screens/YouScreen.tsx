@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Share, Text, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import { semantic, fontFamily, fontSize, radius } from '../theme';
+import QRCode from 'react-native-qrcode-svg';
+import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
 import { Icon, Switch, Card, Badge, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { useActions, useFamilies, useFamily, useSession } from '../store';
+import { useActions, useFamilies, useFamily, useFriends, useSession } from '../store';
 import type { FamilyState } from '../store';
 import { keyStorage } from '../store/keyStorage';
 import { buildExtendedInvite } from '../crypto/e2ee';
@@ -207,6 +208,8 @@ function FamiliesCard({
  */
 function E2EECard({ family }: { family: Family }) {
   const [keyB64, setKeyB64] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const [showAddMember, setShowAddMember] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,17 +249,209 @@ function E2EECard({ family }: { family: Family }) {
               {invite}
             </Text>
           </View>
-          <Button size="sm" variant="secondary" leadingIcon={<Icon name="share-2" size={14} color={semantic.textStrong} />} onPress={share}>
-            Share invite
-          </Button>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button
+              size="sm"
+              variant="secondary"
+              leadingIcon={<Icon name="share-2" size={14} color={semantic.textStrong} />}
+              onPress={share}
+              style={{ flex: 1 }}
+            >
+              Share invite
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              leadingIcon={<Icon name="qr-code" size={14} color={semantic.textStrong} />}
+              onPress={() => setShowQr((s) => !s)}
+              style={{ flex: 1 }}
+            >
+              {showQr ? 'Hide QR' : 'Show QR'}
+            </Button>
+          </View>
+          {/* Phase X — a scannable version of the same extended invite, for
+              someone to join with FamilyGateScreen's camera scanner. */}
+          {showQr && (
+            <View style={{ alignItems: 'center', paddingVertical: 8 }}>
+              <View style={{ padding: 16, backgroundColor: colors.white, borderRadius: radius.lg, ...shadow.sm }}>
+                <QRCode value={invite} size={200} />
+              </View>
+            </View>
+          )}
         </>
       ) : (
         <Text style={{ fontSize: fontSize.bodySm, color: semantic.textFaint }}>
           This device doesn't have the key yet — open a chat to enter it.
         </Text>
       )}
+
+      {/* Phase X — any member can add straight from their friends list (no
+          accept step — they're already mutual friends), not just the owner. */}
+      <Pressable
+        onPress={() => setShowAddMember(true)}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 10,
+          borderTopWidth: 1,
+          borderTopColor: semantic.borderSubtle,
+          paddingTop: 10,
+        }}
+      >
+        <Icon name="user-plus" size={16} color={semantic.textBody} />
+        <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 14, color: semantic.textStrong }}>
+          Add a friend to this family
+        </Text>
+        <Icon name="chevron-right" size={16} color={semantic.textFaint} />
+      </Pressable>
+      {showAddMember && <AddMemberSheet family={family} onClose={() => setShowAddMember(false)} />}
+
       {family.role === 'owner' && <RotateKeyRow />}
+      <LeaveFamilyRow family={family} />
     </Card>
+  );
+}
+
+/**
+ * Phase X — bottom sheet listing this device's friends (useFriends()) not
+ * already in `family`, tap to add instantly. Mirrors FriendThreadScreen's
+ * FriendGroupSettingsSheet "Add a friend" list/pattern.
+ */
+function AddMemberSheet({ family, onClose }: { family: Family; onClose: () => void }) {
+  const actions = useActions();
+  const friends = useFriends();
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const [addedIds, setAddedIds] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const memberIds = new Set(family.members.map((m) => m.id));
+  const addable = friends.filter((f) => !memberIds.has(f.id) && !addedIds.includes(f.id));
+
+  const add = async (friendId: string) => {
+    setAddingId(friendId);
+    setError(null);
+    try {
+      await actions.addFriendToFamily(friendId);
+      setAddedIds((ids) => [...ids, friendId]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not add that friend');
+    } finally {
+      setAddingId(null);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.45)', justifyContent: 'flex-end' }}
+    >
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <ScrollView
+        style={{ maxHeight: '75%' }}
+        contentContainerStyle={{
+          backgroundColor: semantic.surfaceCard,
+          borderTopLeftRadius: 28,
+          borderTopRightRadius: 28,
+          paddingHorizontal: 20,
+          paddingTop: 10,
+          paddingBottom: 28,
+          gap: 14,
+          ...shadow.xl,
+        }}
+      >
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center' }} />
+        <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong }}>Add a friend to {family.name}</Text>
+        <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted }}>
+          They join instantly — no invite needed since you're already friends.
+        </Text>
+
+        {!!error && <Text style={{ fontSize: 13, color: semantic.danger }}>{error}</Text>}
+
+        <View style={{ gap: 10 }}>
+          {addable.map((f) => (
+            <Pressable key={f.id} onPress={() => (addingId ? undefined : add(f.id))} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Avatar name={f.name} size={34} />
+              <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{f.name}</Text>
+              {addingId === f.id ? (
+                <ActivityIndicator size="small" color={semantic.textMuted} />
+              ) : (
+                <Icon name="plus-circle" size={20} color={semantic.brand} />
+              )}
+            </Pressable>
+          ))}
+          {addedIds.map((id) => {
+            const f = friends.find((x) => x.id === id);
+            if (!f) return null;
+            return (
+              <View key={id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, opacity: 0.6 }}>
+                <Avatar name={f.name} size={34} />
+                <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{f.name}</Text>
+                <Badge tone="brand" size="sm">
+                  Added
+                </Badge>
+              </View>
+            );
+          })}
+          {addable.length === 0 && addedIds.length === 0 && (
+            <Text style={{ fontSize: 13, color: semantic.textFaint }}>
+              All your friends are already in this family — connect with more friends first.
+            </Text>
+          )}
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+/**
+ * Phase X — self-leave, always allowed (unlike rotate-key above, no
+ * owner-only gate). Tap-to-arm confirm, same pattern as RotateKeyRow below.
+ */
+function LeaveFamilyRow({ family }: { family: Family }) {
+  const actions = useActions();
+  const [phase, setPhase] = useState<'idle' | 'confirm' | 'leaving' | 'error'>('idle');
+
+  const leave = async () => {
+    setPhase('leaving');
+    try {
+      await actions.leaveFamily(family.id);
+      // No 'done' phase to show — a successful leave switches the active
+      // family (or shows onboarding) out from under this card entirely.
+    } catch {
+      setPhase('error');
+      setTimeout(() => setPhase('idle'), 3000);
+    }
+  };
+
+  return (
+    <View style={{ borderTopWidth: 1, borderTopColor: semantic.borderSubtle, paddingTop: 10, gap: 8 }}>
+      {phase === 'idle' && (
+        <Pressable onPress={() => setPhase('confirm')} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Icon name="log-out" size={16} color={semantic.danger} />
+          <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 14, color: semantic.danger }}>Leave family</Text>
+          <Icon name="chevron-right" size={16} color={semantic.textFaint} />
+        </Pressable>
+      )}
+      {phase === 'confirm' && (
+        <View style={{ gap: 8 }}>
+          <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted }}>
+            {family.role === 'owner'
+              ? "You'll lose access to this family's chats and data — ownership passes to its longest-standing member."
+              : "You'll lose access to this family's chats and data. You can rejoin later with an invite."}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button size="sm" variant="danger" onPress={leave}>
+              Leave now
+            </Button>
+            <Button size="sm" variant="ghost" onPress={() => setPhase('idle')}>
+              Cancel
+            </Button>
+          </View>
+        </View>
+      )}
+      {phase === 'leaving' && <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted }}>Leaving…</Text>}
+      {phase === 'error' && <Text style={{ fontSize: fontSize.bodySm, color: semantic.danger }}>Could not leave — try again.</Text>}
+    </View>
   );
 }
 

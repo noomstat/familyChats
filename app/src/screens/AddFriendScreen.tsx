@@ -161,7 +161,8 @@ function Section({ title, subtitle, children }: { title: string; subtitle?: stri
  * the in-flight attempt resolves (success OR failure), so a mis-scan can be
  * retried without leaving the camera view.
  */
-function ScannerCard({ connecting, onScanned }: { connecting: boolean; onScanned: (raw: string) => Promise<boolean> }) {
+/** Exported for reuse by FamilyGateScreen.tsx's join-by-QR path (Phase X) — generic beyond friend codes: any scanned QR string is handed to `onScanned`. */
+export function ScannerCard({ connecting, onScanned }: { connecting: boolean; onScanned: (raw: string) => Promise<boolean> }) {
   const [permission, requestPermission] = useCameraPermissions();
   const scannedRef = useRef(false);
 

@@ -7,6 +7,7 @@ import { Button, Card, Icon, Input } from '../components/core';
 import { PinMark } from '../components/brand/PinMark';
 import { useActions } from '../store';
 import { buildExtendedInvite, parseInvite } from '../crypto/e2ee';
+import { ScannerCard } from './AddFriendScreen';
 import type { FamilyStackParamList } from '../navigation/types';
 
 /**
@@ -52,19 +53,24 @@ export function FamilyGateScreen({
     }
   };
 
-  const submitJoin = async () => {
+  /** Shared by both the typed-code field and the camera scanner below — `raw` is either a plain/extended invite pasted by hand or a scanned QR payload, both parsed the same way. Returns whether the join succeeded (the scanner uses this to decide whether to keep scanning). */
+  const performJoin = async (raw: string): Promise<boolean> => {
     setError(null);
     setJoining(true);
     try {
-      const parsed = parseInvite(code);
+      const parsed = parseInvite(raw);
       await actions.joinFamily(parsed.code, parsed.keyB64);
       onJoined?.();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not join with that code');
+      return false;
     } finally {
       setJoining(false);
     }
   };
+
+  const submitJoin = () => performJoin(code);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top', 'bottom']}>
@@ -97,6 +103,20 @@ export function FamilyGateScreen({
               {creating ? 'Creating…' : 'Create family'}
             </Button>
           </Card>
+
+          {/* Phase X — camera scanning is native-only (see AddFriendScreen's ScannerCard, reused here); web falls back to the paste field below. */}
+          {Platform.OS !== 'web' && (
+            <Card>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <Icon name="scan-line" size={18} color={semantic.brand} />
+                <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 17, color: semantic.textStrong }}>Scan a family QR</Text>
+              </View>
+              <Text style={{ fontSize: fontSize.bodySm, color: semantic.textMuted, marginBottom: 14 }}>
+                Point your camera at another member's family QR to join instantly, key included.
+              </Text>
+              <ScannerCard connecting={joining} onScanned={performJoin} />
+            </Card>
+          )}
 
           <Card>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
