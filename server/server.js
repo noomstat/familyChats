@@ -7,7 +7,7 @@ import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
 import { pool, query } from './src/db.js';
 import { register, login, logout, requireAuth } from './src/auth.js';
-import { createFamily, joinFamily, getFamilyByIdForUser, listFamiliesForUser, regenerateCode, addKeyRoll, addMemberFromFriend, leaveFamily } from './src/family.js';
+import { createFamily, joinFamily, getFamilyByIdForUser, listFamiliesForUser, regenerateCode, addKeyRoll, addMemberFromFriend, grantFamilyKey, leaveFamily } from './src/family.js';
 import { runWithFamily, getActiveFamilyId } from './src/requestContext.js';
 import { attachWebSocketServer } from './src/ws.js';
 import {
@@ -211,6 +211,23 @@ app.post('/families/:familyId/members', requireAuth, resolveFamily, async (req, 
     const { friendId, wrapped } = req.body ?? {};
     const found = await addMemberFromFriend({ familyId: req.params.familyId, actorId: req.user.id, friendId, wrapped });
     res.status(201).json(found);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Phase Y — pure auto-grant: any current key-holder may grant ANY other
+// co-member (no friendship required, unlike POST /families/:familyId/members
+// above) a wrapped copy of the family anchor key. `wrapped` is wrapped
+// client-side to the target member's published public key — see family.js's
+// grantFamilyKey for the full shape/broadcast contract. Idempotent — a
+// concurrent/duplicate grant for the same member is a silent no-op, still
+// 201.
+app.post('/families/:familyId/grant-key', requireAuth, resolveFamily, async (req, res, next) => {
+  try {
+    const { memberId, wrapped } = req.body ?? {};
+    const result = await grantFamilyKey({ familyId: req.params.familyId, actorId: req.user.id, memberId, wrapped });
+    res.status(201).json(result);
   } catch (err) {
     next(err);
   }

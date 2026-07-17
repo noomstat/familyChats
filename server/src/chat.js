@@ -182,6 +182,7 @@ export async function getBootstrap(userId) {
       friendGroups,
       friendGroupKeys,
       familyMemberKeys,
+      familyMemberKeyHolders: [],
       serverTime: new Date().toISOString(),
     };
   }
@@ -223,8 +224,15 @@ export async function getBootstrap(userId) {
   // Phase P — family-scale like grocery/tasks/events (a handful to a few
   // dozen rows), so the whole list rides along in bootstrap same as those.
   const notes = await listNotes(userId);
+  // Phase Y — every active-family member id that already holds a wrapped
+  // copy of the anchor key (a family_member_keys row), so the client's
+  // auto-grant sweep (grantKeysToKeylessMembers) knows who NOT to re-grant
+  // without needing a separate round-trip. Family-scale (one row per
+  // member), full resend same as the other bootstrap-only lists above.
+  const { rows: holderRows } = await query('SELECT member_id FROM family_member_keys WHERE family_id = $1', [familyId]);
+  const familyMemberKeyHolders = holderRows.map((r) => r.member_id);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, friendGroups, friendGroupKeys, familyMemberKeys, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, friendGroups, friendGroupKeys, familyMemberKeys, familyMemberKeyHolders, serverTime: new Date().toISOString() };
 }
 
 /**

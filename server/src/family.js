@@ -37,15 +37,23 @@ function randomCode(length = 6) {
   return out;
 }
 
+// Phase Y — LEFT JOINs user_keys so every member carries their currently
+// published X25519 public key (null if they've never published one) —
+// what the client's auto-grant sweep (grantKeysToKeylessMembers) wraps the
+// family anchor key to. Flows through every caller of memberRows
+// (getFamilyByIdForUser/listFamiliesForUser/joinFamily's `members` broadcast/
+// addMemberFromFriend/leaveFamily), same as every other member field here.
 async function memberRows(familyId) {
   const { rows } = await query(
-    `SELECT u.id, u.name, u.username, fm.role
-     FROM family_members fm JOIN users u ON u.id = fm.user_id
+    `SELECT u.id, u.name, u.username, fm.role, uk.public_key
+     FROM family_members fm
+     JOIN users u ON u.id = fm.user_id
+     LEFT JOIN user_keys uk ON uk.user_id = u.id
      WHERE fm.family_id = $1
      ORDER BY fm.role = 'owner' DESC, fm.joined_at ASC`,
     [familyId],
   );
-  return rows;
+  return rows.map((r) => ({ id: r.id, name: r.name, username: r.username, role: r.role, publicKey: r.public_key ?? null }));
 }
 
 /**
@@ -358,6 +366,58 @@ export async function getFamilyMemberKeys(userId) {
     [userId],
   );
   return rows.map((r) => ({ familyId: r.family_id, wrapped: r.wrapped, wrappedBy: r.wrapped_by, wrappedByPublicKey: r.wrapped_by_public_key ?? null }));
+}
+
+/**
+ * Phase Y — pure auto-grant: any current key-holder (enforced client-side
+ * only, by the caller never attempting this unless it actually holds the
+ * family's ring — the server has no way to verify that, same trust model as
+ * every other e2ee envelope in this codebase) may grant ANY other co-member
+ * a wrapped copy of the family's anchor key — co-membership only, unlike
+ * addMemberFromFriend above, NO friendship check. `wrapped` is
+ * wrapKey(deriveSharedKey(actorPriv, memberPub), anchorKey) — an opaque
+ * e2e:1: envelope; the server only ever checks its shape. Idempotent: ON
+ * CONFLICT DO NOTHING on the (family_id, member_id) PK — first grant wins, a
+ * concurrent/duplicate grant is a silent no-op (still returns success — see
+ * server.js's route). Broadcasts only on an actual first-grant so the target
+ * member's device doesn't get redundant deliveries for a no-op call.
+ */
+export async function grantFamilyKey({ familyId, actorId, memberId, wrapped }) {
+  if (!memberId) throw badRequest('memberId is required');
+  if (!isEnvelope(wrapped)) throw badRequest('wrapped must be an e2ee envelope');
+
+  const { rowCount: actorIsMember } = await query(
+    'SELECT 1 FROM family_members WHERE family_id = $1 AND user_id = $2',
+    [familyId, actorId],
+  );
+  if (!actorIsMember) throw forbidden('not a member of this family');
+
+  const { rowCount: memberIsMember } = await query(
+    'SELECT 1 FROM family_members WHERE family_id = $1 AND user_id = $2',
+    [familyId, memberId],
+  );
+  if (!memberIsMember) throw forbidden('member is not a member of this family');
+
+  const { rowCount: inserted } = await query(
+    `INSERT INTO family_member_keys (family_id, member_id, wrapped, wrapped_by) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (family_id, member_id) DO NOTHING`,
+    [familyId, memberId, wrapped, actorId],
+  );
+
+  if (inserted) {
+    const { rows: actorKeyRows } = await query('SELECT public_key FROM user_keys WHERE user_id = $1', [actorId]);
+    await broadcastToUsers([memberId], {
+      type: 'family',
+      action: 'familyMemberKey',
+      familyId,
+      memberId,
+      wrapped,
+      wrappedBy: actorId,
+      wrappedByPublicKey: actorKeyRows[0]?.public_key ?? null,
+    });
+  }
+
+  return { granted: !!inserted };
 }
 
 /**
