@@ -7,6 +7,7 @@ import { AppState as RNAppState, AppStateStatus } from 'react-native';
 import { getBootstrap, getSync, getWsUrl } from '../api/client';
 import {
   applyFriendGroupsSync,
+  applyIncomingFamilyMemberKeys,
   applyIncomingFriendGroupKey,
   applyIncomingKeyRoll,
   applyIncomingKeyRolls,
@@ -165,6 +166,20 @@ export function useRealtime(): void {
                 { groupId: data.groupId, wrapped: data.wrapped, wrappedBy: data.wrappedBy, wrappedByPublicKey: data.wrappedByPublicKey ?? null },
                 dispatch,
               );
+            }
+            break;
+          // Phase X — I was just added to a family from someone's friends
+          // list; this is my wrapped copy of its anchor key. Family-
+          // independent, same as `friendGroupKey` above — this may well be a
+          // family I've never seen before (see applyIncomingFamilyMemberKeys'
+          // header for how that gets picked up into `families`).
+          case 'familyMemberKey':
+            if (data.familyId && data.wrapped && data.wrappedBy) {
+              applyIncomingFamilyMemberKeys(
+                [{ familyId: data.familyId, wrapped: data.wrapped, wrappedBy: data.wrappedBy, wrappedByPublicKey: data.wrappedByPublicKey ?? null }],
+                session.token,
+                dispatch,
+              ).catch((err) => console.warn('[realtime] familyMemberKey apply failed', err));
             }
             break;
           case 'family':

@@ -122,6 +122,23 @@ export function getFamilyMembers(token: string) {
   return api<{ members: FamilyMember[] }>('/families/members', { token });
 }
 
+// ── Phase X: family membership (add-from-friends, leave) ────────
+
+/**
+ * Adds a friend directly into a family — instant (no accept step, since
+ * they're already mutual friends). `wrapped` is the family's anchor key
+ * (ring[0]), wrapped client-side under deriveSharedKey(myPriv, friendPub) —
+ * see crypto/e2ee.ts's wrapKey. The server only ever checks its shape.
+ */
+export function addFamilyMemberFromFriend(token: string, familyId: string, input: { friendId: string; wrapped: string }) {
+  return api<FamilyInfo>(`/families/${familyId}/members`, { method: 'POST', body: input, token });
+}
+
+/** Self-leave — always allowed. `deleted` is true if this was the last member (the whole family was deleted server-side). */
+export function leaveFamily(token: string, familyId: string) {
+  return api<{ familyId: string; deleted: boolean }>(`/families/${familyId}/leave`, { method: 'POST', token });
+}
+
 // ── Phase N: E2EE key rotation ──────────────────────────────
 
 export interface KeyRoll {
@@ -201,6 +218,25 @@ export interface FriendGroupKey {
   wrappedByPublicKey: string | null;
 }
 
+/**
+ * Phase X — `userId`'s own wrapped copy of a family's anchor key (ring[0]),
+ * as produced client-side by wrapKey(deriveSharedKey(adderPriv, myPub),
+ * anchorKey) when someone added them from their friends list — see
+ * app/src/crypto/e2ee.ts. `wrappedByPublicKey` rides along so the client can
+ * unwrap via deriveSharedKey(myPriv, wrappedByPublicKey) even if `wrappedBy`
+ * isn't (yet) in the viewer's own friends list — mirrors FriendGroupKey's
+ * shape exactly. A family joined by invite code (not add-from-friends) has
+ * no entry here — that device already holds the key from the extended
+ * invite, nothing to deliver.
+ */
+export interface FamilyMemberKey {
+  familyId: string;
+  /** e2e:1: envelope — the family anchor key, encrypted under the pairwise DH secret with `wrappedBy`. */
+  wrapped: string;
+  wrappedBy: string;
+  wrappedByPublicKey: string | null;
+}
+
 export interface BootstrapResponse {
   groups: BootstrapGroup[];
   grocery: ServerGroceryItem[];
@@ -224,6 +260,8 @@ export interface BootstrapResponse {
   friendGroups: BootstrapGroup[];
   /** Phase V — this user's wrapped copy of every friend GROUP key they hold. */
   friendGroupKeys: FriendGroupKey[];
+  /** Phase X — this user's wrapped copy of every family anchor key delivered via add-from-friends. */
+  familyMemberKeys: FamilyMemberKey[];
   serverTime: string;
 }
 

@@ -24,6 +24,7 @@ import {
   EventPatch,
   FamilyInfo,
   FamilyMember,
+  FamilyMemberKey,
   Friend,
   FriendGroupKey,
   KeyRoll,
@@ -48,6 +49,7 @@ import {
   addCategory as apiAddCategory,
   addEventItem,
   addExpense as apiAddExpense,
+  addFamilyMemberFromFriend as apiAddFamilyMemberFromFriend,
   addFriendGroupMember as apiAddFriendGroupMember,
   addGroupMember,
   addGroceryItem,
@@ -66,6 +68,7 @@ import {
   getGroupMessages,
   getMe,
   joinFamily as apiJoinFamily,
+  leaveFamily as apiLeaveFamily,
   leaveFriendGroup as apiLeaveFriendGroup,
   openDm as apiOpenDm,
   postKeyRoll,
@@ -442,6 +445,74 @@ export function applyIncomingFriendGroupKey(
   if (!key || resolvedConvoKeys[evt.groupId] === key) return;
   resolvedConvoKeys = { ...resolvedConvoKeys, [evt.groupId]: key };
   dispatch({ type: 'REDECRYPT_CONVO', keys: { [evt.groupId]: key } });
+}
+
+// ── Phase X — family membership: add-from-friends key delivery ──
+//
+// My wrapped family anchor keys as of the latest bootstrap/WS delivery
+// (familyId -> wrap), kept module-level (same rationale as familyKeyRing/
+// friendGroupKeyWraps above) so a retry once myIdentity loads (see the
+// identity-ready effect — bootstrap and identity-readiness resolve as two
+// independent async effects with no guaranteed order) can re-attempt without
+// needing the original bootstrap payload again.
+let familyMemberKeyWraps: Record<string, { wrapped: string; wrappedByPublicKey: string | null }> = {};
+
+/**
+ * Unwraps and seeds a fresh one-element ring for every family whose wrapped
+ * anchor key I hold (bootstrap's familyMemberKeys, or a live WS
+ * `familyMemberKey` event — see useRealtime.ts) but don't already hold ANY
+ * local ring for. Mirrors the friend-group-key wrap pattern
+ * (applyIncomingFriendGroupKey) except the unwrap key is
+ * deriveSharedKey(myPriv, wrappedByPublicKey) — the adder's current public
+ * key, delivered on the wire exactly like friend_group_keys'
+ * wrappedByPublicKey — instead of a friend-group wrapper. The existing
+ * Phase N key-roll replay (the key-load effect, keyed on state.family?.id)
+ * rebuilds the rest of the ring and REDECRYPTs once/if this family becomes
+ * active; a family we already hold ANY key for is left untouched (we may
+ * already be ahead of the anchor via a rotation).
+ *
+ * A newly-discovered family (this device held no ring for it before this
+ * call) also isn't yet in `families` — createFamily/joinFamily are the only
+ * other ways a family enters that list, and neither of those ran on this
+ * device for this family. GET /me is re-fetched to pick it up, preserving
+ * whichever family is currently active (the X-Family-Id header this device
+ * has set doesn't change — see api/client.ts's setActiveFamilyId).
+ *
+ * `keys` may be empty (the identity-ready effect's retry passes []) — the
+ * cache from a previous call is still processed in that case, now that
+ * myIdentity is populated.
+ */
+export async function applyIncomingFamilyMemberKeys(
+  keys: FamilyMemberKey[],
+  token: string | undefined,
+  dispatch: React.Dispatch<Action>,
+): Promise<void> {
+  if (keys.length) {
+    familyMemberKeyWraps = {
+      ...familyMemberKeyWraps,
+      ...Object.fromEntries(keys.map((k) => [k.familyId, { wrapped: k.wrapped, wrappedByPublicKey: k.wrappedByPublicKey }])),
+    };
+  }
+  if (!myIdentity || !Object.keys(familyMemberKeyWraps).length) return;
+
+  let discoveredNew = false;
+  for (const [familyId, wrap] of Object.entries(familyMemberKeyWraps)) {
+    if (!wrap.wrappedByPublicKey) continue;
+    const existing = await keyStorage.getRing(familyId);
+    if (existing && existing.length) continue; // already hold a key for this family — leave it alone
+    const pairwise = deriveSharedKey(myIdentity.privB64, wrap.wrappedByPublicKey);
+    const anchorKey = unwrapKey(pairwise, wrap.wrapped);
+    if (!anchorKey) continue; // stale/mismatched wrap — a later delivery may resolve it
+    await keyStorage.setRing(familyId, [anchorKey]);
+    discoveredNew = true;
+  }
+  if (!discoveredNew || !token) return;
+  try {
+    const me = await getMe(token);
+    dispatch({ type: 'FAMILY_CONTEXT', families: me.families.map(toFamilyState), activeFamilyId: me.activeFamilyId });
+  } catch (err) {
+    console.warn('[store] family-member-key family refresh failed', err);
+  }
 }
 
 // ── Server <-> store message mapping ─────────────────────────
@@ -1272,7 +1343,14 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     getBootstrap(token)
       .then((payload) => {
-        if (!cancelled) dispatch({ type: 'BOOTSTRAP', payload });
+        if (cancelled) return;
+        dispatch({ type: 'BOOTSTRAP', payload });
+        // Phase X — seed a ring for any newly-added family whose wrapped
+        // anchor key rode along in this bootstrap (no-op if myIdentity
+        // hasn't loaded yet — the identity-ready effect below retries).
+        applyIncomingFamilyMemberKeys(payload.familyMemberKeys, token, dispatch).catch((err) =>
+          console.warn('[store] familyMemberKeys apply failed', err),
+        );
       })
       .catch((err) => console.warn('[store] bootstrap failed', err));
     return () => {
@@ -1314,6 +1392,11 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         resolvedConvoKeys = resolved;
         dispatch({ type: 'SET_IDENTITY_READY', value: true });
         if (Object.keys(resolved).length) dispatch({ type: 'REDECRYPT_CONVO', keys: resolved });
+        // Phase X — retry any family-member-key wraps that arrived before
+        // myIdentity was ready (see applyIncomingFamilyMemberKeys' header).
+        applyIncomingFamilyMemberKeys([], token, dispatch).catch((err) =>
+          console.warn('[store] familyMemberKeys retry failed', err),
+        );
       } catch (err) {
         console.warn('[store] identity key publish failed', err);
       }
@@ -1368,6 +1451,9 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
             .then((payload) => {
               if (cancelled) return;
               dispatch({ type: 'BOOTSTRAP', payload });
+              applyIncomingFamilyMemberKeys(payload.familyMemberKeys, token, dispatch).catch((err) =>
+                console.warn('[store] familyMemberKeys apply failed', err),
+              );
               // Phase N — replay any rolls this ring hasn't absorbed yet.
               if (!familyKeyRing || familyKeyRing.familyId !== familyId) return;
               const grown = applyKeyRolls(familyKeyRing.keys, payload.keyRolls);
@@ -2072,6 +2158,66 @@ export function useActions() {
         const keys = [...familyKeyRing.keys, newKey];
         familyKeyRing = { familyId, keys };
         await keyStorage.setRing(familyId, keys);
+      },
+
+      // ── Phase X — family membership: add-from-friends, leave ───
+
+      /**
+       * Adds a friend from `state.friends` straight into the ACTIVE family —
+       * instant, no accept step. This device (which must already hold the
+       * family's ring — any current member can do this, not just the owner)
+       * wraps the anchor key (ring[0], not the current/rotated key — the
+       * friend's own client walks the family_key_rolls chain via the normal
+       * Phase N replay to rebuild the rest) to the friend's published public
+       * key under their pairwise DH secret — the exact rotate-key
+       * construction, just keyed by deriveSharedKey instead of a previous
+       * family key. The server only ever sees the wrapped ciphertext.
+       */
+      addFriendToFamily: async (friendId: string): Promise<void> => {
+        if (!token || !state.family) throw new Error('not signed in / no active family');
+        if (!myIdentity) throw new Error("This device doesn't have an identity key yet — try again in a moment");
+        const familyId = state.family.id;
+        const ring = await keyStorage.getRing(familyId);
+        const anchorKey = ring?.[0];
+        if (!anchorKey) throw new Error("This device doesn't hold this family's key yet");
+        const friendPub = state.friends.find((f) => f.id === friendId)?.publicKey;
+        if (!friendPub) throw new Error("Missing that friend's public key — ask them to reopen the app and try again");
+        const pairwise = deriveSharedKey(myIdentity.privB64, friendPub);
+        const wrapped = await wrapKey(pairwise, anchorKey);
+        const info = await apiAddFamilyMemberFromFriend(token, familyId, { friendId, wrapped });
+        dispatch({ type: 'FAMILY_PATCH', patch: { id: familyId, members: info.members } });
+      },
+
+      /**
+       * Self-leave — always allowed (unlike addFriendToFamily/rotateKey,
+       * there's no owner-only gate here either, since leaving your own
+       * membership needs no special privilege). On success: forget the local
+       * key material for that family (a future re-join, if any, starts
+       * fresh), drop it from `families`, and fall back to another family (or
+       * none) exactly like switchFamily — including re-bootstrapping so the
+       * flat groups/messages/… slices reflect the new active family right
+       * away rather than waiting on the key-load effect (which only
+       * re-bootstraps when a ring is found — see its comment).
+       */
+      leaveFamily: async (familyId: string): Promise<void> => {
+        if (!token) throw new Error('not signed in');
+        await apiLeaveFamily(token, familyId);
+        await keyStorage.clear(familyId);
+        const remaining = state.families.filter((f) => f.id !== familyId);
+        const nextActiveId = remaining[0]?.id ?? null;
+        dispatch({ type: 'FAMILY_CONTEXT', families: remaining, activeFamilyId: nextActiveId });
+        apiSetActiveFamilyId(nextActiveId);
+        if (nextActiveId) {
+          await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, nextActiveId).catch(() => {});
+          try {
+            const payload = await getBootstrap(token);
+            dispatch({ type: 'BOOTSTRAP', payload });
+          } catch (err) {
+            console.warn('[store] leaveFamily re-bootstrap failed', err);
+          }
+        } else {
+          await AsyncStorage.removeItem(ACTIVE_FAMILY_KEY).catch(() => {});
+        }
       },
 
       // ── Friends (Phase U) ─────────────────────────────────────
