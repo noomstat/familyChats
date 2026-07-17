@@ -9,7 +9,7 @@ import { listGrocery, listTasks } from './lists.js';
 import { listEvents } from './events.js';
 import { listAlbums } from './albums.js';
 import { getFinance, listCategories } from './finance.js';
-import { listKeyRolls } from './family.js';
+import { listKeyRolls, getFamilyMemberKeys } from './family.js';
 import { listNotes } from './notes.js';
 import { getFriends } from './friends.js';
 import { getActiveFamilyId } from './requestContext.js';
@@ -157,6 +157,12 @@ export async function getBootstrap(userId) {
   const friends = await getFriends(userId);
   // Phase V — same family-independence as `friends` above.
   const { friendGroups, friendGroupKeys } = await friendGroupsBootstrapFor(userId);
+  // Phase X — my wrapped family anchor keys (one per family I was added to
+  // via add-from-friends, not by invite code), same family-independence as
+  // `friends`/`friendGroupKeys` above — a newly-added member may not even
+  // have this family as their active one yet, so this must ride in BOTH the
+  // family-less early-return and the normal path below.
+  const familyMemberKeys = await getFamilyMemberKeys(userId);
 
   const familyId = await userFamilyId(userId);
   if (!familyId) {
@@ -175,6 +181,7 @@ export async function getBootstrap(userId) {
       friends,
       friendGroups,
       friendGroupKeys,
+      familyMemberKeys,
       serverTime: new Date().toISOString(),
     };
   }
@@ -217,7 +224,7 @@ export async function getBootstrap(userId) {
   // dozen rows), so the whole list rides along in bootstrap same as those.
   const notes = await listNotes(userId);
 
-  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, friendGroups, friendGroupKeys, serverTime: new Date().toISOString() };
+  return { groups, grocery, tasks, events, albums, expenses, transfers, budget, categories, keyRolls, notes, friends, friendGroups, friendGroupKeys, familyMemberKeys, serverTime: new Date().toISOString() };
 }
 
 /**

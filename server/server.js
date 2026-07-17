@@ -7,7 +7,7 @@ import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
 import { pool, query } from './src/db.js';
 import { register, login, logout, requireAuth } from './src/auth.js';
-import { createFamily, joinFamily, getFamilyByIdForUser, listFamiliesForUser, regenerateCode, addKeyRoll } from './src/family.js';
+import { createFamily, joinFamily, getFamilyByIdForUser, listFamiliesForUser, regenerateCode, addKeyRoll, addMemberFromFriend, leaveFamily } from './src/family.js';
 import { runWithFamily, getActiveFamilyId } from './src/requestContext.js';
 import { attachWebSocketServer } from './src/ws.js';
 import {
@@ -197,6 +197,32 @@ app.post('/families/:familyId/key-rolls', requireAuth, resolveFamily, async (req
   try {
     const roll = await addKeyRoll({ familyId: req.params.familyId, userId: req.user.id, wrapped: req.body?.wrapped });
     res.status(201).json({ roll });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Phase X — add-from-friends: instant (no accept step), any member may call
+// this (not owner-only, unlike key-rolls). `wrapped` is the family anchor
+// key, wrapped client-side to the friend's public key — see family.js's
+// addMemberFromFriend for the full shape/broadcast contract.
+app.post('/families/:familyId/members', requireAuth, resolveFamily, async (req, res, next) => {
+  try {
+    const { friendId, wrapped } = req.body ?? {};
+    const found = await addMemberFromFriend({ familyId: req.params.familyId, actorId: req.user.id, friendId, wrapped });
+    res.status(201).json(found);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Phase X — self-leave, always allowed. Owner auto-transfers to the oldest
+// remaining member; the family (and every row scoped to it) is deleted if
+// the last member leaves — see family.js's leaveFamily.
+app.post('/families/:familyId/leave', requireAuth, resolveFamily, async (req, res, next) => {
+  try {
+    const result = await leaveFamily({ familyId: req.params.familyId, userId: req.user.id });
+    res.json(result);
   } catch (err) {
     next(err);
   }
