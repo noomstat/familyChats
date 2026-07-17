@@ -167,48 +167,25 @@ export function unwrapKey(prevKeyB64: string, envelope: string): string | null {
   return payload && typeof payload.k === 'string' ? payload.k : null;
 }
 
-// ── extended invite (`CODE#K1.<key>`) ─────────────────────────
-
-/** Builds the shareable extended invite: the plain code + a `#K1.<key>` suffix that never reaches the server. */
-export function buildExtendedInvite(code: string, keyB64: string): string {
-  // Re-encode the key url-safe (no '/' or '+' to clash with sharing/URLs), unpadded.
-  const keyBytes = base64ToBytes(keyB64);
-  return `${code}#K1.${bytesToBase64(keyBytes, true)}`;
-}
+// ── invite code ─────────────────────────────────────────────
+//
+// Phase Y — pure auto-grant: the shareable invite is now just the PLAIN
+// family code. Nobody ever shares/pastes/scans a key — the family key is
+// delivered only by an existing key-holder's device wrapping it to a
+// newcomer's published public key (see AppStore.tsx's
+// grantKeysToKeylessMembers). parseInvite stays tolerant of the legacy
+// extended form (`CODE#K1.<key>`) so an old invite link/QR still joins
+// correctly — the key segment, if present, is simply ignored.
 
 /**
- * Parses either a plain invite code or an extended invite (`CODE#K1.<key>`)
- * into `{code, keyB64?}`. `keyB64` is always re-encoded to the standard
- * alphabet so callers can feed it straight to encrypt/decryptPayload. Tolerant
- * of surrounding whitespace and a pasted-with-spaces key segment.
+ * Parses either a plain invite code or a legacy extended invite
+ * (`CODE#K1.<key>`) into `{code}` — any trailing `#…` key segment is
+ * recognized and discarded, never surfaced to callers (Phase Y: the family
+ * key is never carried by the invite). Tolerant of surrounding whitespace.
  */
-export function parseInvite(input: string): { code: string; keyB64?: string } {
+export function parseInvite(input: string): { code: string } {
   const trimmed = input.trim();
   const hashIdx = trimmed.indexOf('#');
-  if (hashIdx < 0) return { code: trimmed.toUpperCase() };
-
-  const code = trimmed.slice(0, hashIdx).trim().toUpperCase();
-  let keyPart = trimmed.slice(hashIdx + 1).trim();
-  // Strip the "K1." version marker if present.
-  if (keyPart.startsWith('K1.')) keyPart = keyPart.slice(3);
-  if (!keyPart) return { code };
-
-  const keyBytes = base64ToBytes(keyPart);
-  if (keyBytes.length !== KEY_BYTES) return { code }; // malformed key segment — degrade to code-only join
-  return { code, keyB64: bytesToBase64(keyBytes) };
-}
-
-/**
- * The "enter your family key" sheet accepts either a full extended invite
- * (`CODE#K1.<key>`, code ignored — the user is already a member) or a bare
- * pasted key. Returns a standard-base64 32-byte key, or undefined if the
- * input isn't a recognizable key of either shape.
- */
-export function parseKeyInput(input: string): string | undefined {
-  const trimmed = input.trim();
-  if (trimmed.includes('#')) return parseInvite(trimmed).keyB64;
-  const keyPart = trimmed.startsWith('K1.') ? trimmed.slice(3) : trimmed;
-  const keyBytes = base64ToBytes(keyPart);
-  if (keyBytes.length !== KEY_BYTES) return undefined;
-  return bytesToBase64(keyBytes);
+  const code = (hashIdx < 0 ? trimmed : trimmed.slice(0, hashIdx)).trim().toUpperCase();
+  return { code };
 }

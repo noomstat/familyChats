@@ -35,6 +35,8 @@ export interface FamilyMember {
   name: string;
   username: string;
   role: 'owner' | 'member';
+  /** Phase Y — this member's currently published X25519 identity public key, or null if they've never published one — what the auto-grant sweep (grantKeysToKeylessMembers) wraps the family anchor key to. */
+  publicKey?: string | null;
 }
 
 export interface FamilyInfo {
@@ -137,6 +139,20 @@ export function addFamilyMemberFromFriend(token: string, familyId: string, input
 /** Self-leave — always allowed. `deleted` is true if this was the last member (the whole family was deleted server-side). */
 export function leaveFamily(token: string, familyId: string) {
   return api<{ familyId: string; deleted: boolean }>(`/families/${familyId}/leave`, { method: 'POST', token });
+}
+
+// ── Phase Y: auto-grant family key (no manual key sharing) ─────
+
+/**
+ * Grants `memberId` (any co-member, no friendship required — unlike
+ * addFamilyMemberFromFriend above) a wrapped copy of the family anchor key.
+ * `wrapped` is wrapKey(deriveSharedKey(myPriv, memberPub), anchorKey) — see
+ * crypto/e2ee.ts. Idempotent: a concurrent/duplicate grant for the same
+ * member is a silent no-op server-side, still 201 — `granted` reports
+ * whether THIS call was the one that actually inserted the row.
+ */
+export function grantFamilyKey(token: string, familyId: string, input: { memberId: string; wrapped: string }) {
+  return api<{ granted: boolean }>(`/families/${familyId}/grant-key`, { method: 'POST', body: input, token });
 }
 
 // ── Phase N: E2EE key rotation ──────────────────────────────
@@ -262,6 +278,8 @@ export interface BootstrapResponse {
   friendGroupKeys: FriendGroupKey[];
   /** Phase X — this user's wrapped copy of every family anchor key delivered via add-from-friends. */
   familyMemberKeys: FamilyMemberKey[];
+  /** Phase Y — active-family member ids that already hold a wrapped copy of the anchor key (a family_member_keys row) — lets the client's auto-grant sweep skip already-granted members without a separate lookup. Empty for a family-less user. */
+  familyMemberKeyHolders: string[];
   serverTime: string;
 }
 

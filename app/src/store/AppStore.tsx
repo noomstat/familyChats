@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef } from 'react';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -17,7 +17,7 @@ import {
 import { tokenStorage } from './tokenStorage';
 import { keyStorage } from './keyStorage';
 import { identityKeyStorage } from './identityKeyStorage';
-import { decryptPayload, decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, parseKeyInput, unwrapKey, wrapKey } from '../crypto/e2ee';
+import { decryptPayload, decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, unwrapKey, wrapKey } from '../crypto/e2ee';
 import { buildFriendCode, deriveSharedKey, generateIdentityKeypair, parseFriendCode } from '../crypto/friends';
 import {
   BootstrapResponse,
@@ -67,6 +67,7 @@ import {
   getFriendCode,
   getGroupMessages,
   getMe,
+  grantFamilyKey as apiGrantFamilyKey,
   joinFamily as apiJoinFamily,
   leaveFamily as apiLeaveFamily,
   leaveFriendGroup as apiLeaveFriendGroup,
@@ -262,11 +263,11 @@ const seedState: AppState = {
 // per user, so a single slot (not keyed per-family-id beyond the guard below)
 // is sufficient; the familyId is kept alongside the keys purely as a
 // staleness guard against a leftover cache entry from a previously-loaded
-// family. Populated: on family load, after createFamily(), after
-// importFamilyKey(), after joinFamily() when the invite carried a key, after
-// rotateKey(), and after an incoming WS `keyroll` (see applyIncomingKeyRoll).
-// Cleared on logout. AppState.hasFamilyKey mirrors this for reactive UI
-// (useE2EE()).
+// family. Populated: on family load, after createFamily() (self-grant),
+// after an incoming auto-grant (Phase Y — applyIncomingFamilyMemberKeys),
+// after rotateKey(), and after an incoming WS `keyroll` (see
+// applyIncomingKeyRoll). Cleared on logout. AppState.hasFamilyKey mirrors
+// this for reactive UI (useE2EE()).
 //
 // Phase N — `keys` is the full ring, oldest-first (index 0 = the anchor key
 // from the invite, last = active/used to encrypt new messages). Rotation
@@ -513,6 +514,65 @@ export async function applyIncomingFamilyMemberKeys(
   } catch (err) {
     console.warn('[store] family-member-key family refresh failed', err);
   }
+}
+
+// ── Phase Y — auto-grant sweep: no manual key sharing ──────────
+//
+// The invite/QR carries no key anymore (see crypto/e2ee.ts's parseInvite) —
+// the family key is delivered ONLY by an existing key-holder's device
+// wrapping the anchor key (ring[0]) to a newcomer's published public key and
+// POSTing it, exactly the addFriendToFamily construction generalized to
+// every co-member (no friendship required — see server's grantFamilyKey).
+// `familyMemberKeyHoldersCache` (module-level, same "plain function, no hook
+// access" rationale as familyKeyRing/groupsCache above) tracks which members
+// are already known to hold a wrapped copy, so the sweep below doesn't
+// repeatedly re-POST an already-granted member on every roster change. Not
+// authoritative — the server's (family_id, member_id) PK + ON CONFLICT DO
+// NOTHING is — this is purely a client-side de-dupe to avoid needless
+// requests.
+let familyMemberKeyHoldersCache: Record<string, Set<string>> = {};
+
+/** Seeds the "who already holds a key" cache from a fresh bootstrap. Additive — a grant made between bootstraps (by this device or another) is never un-tracked. */
+function seedFamilyMemberKeyHolders(familyId: string, holderIds: string[]): void {
+  const existing = familyMemberKeyHoldersCache[familyId] ?? new Set<string>();
+  for (const id of holderIds) existing.add(id);
+  familyMemberKeyHoldersCache[familyId] = existing;
+}
+
+/**
+ * If this device holds `family.id`'s ring, wraps the anchor key (ring[0]) to
+ * every member with a published public key who isn't already a known
+ * key-holder, and POSTs the grant. A no-op if this device doesn't hold the
+ * ring (a fresh joiner-by-code, or a family this device has never been
+ * granted into) — TOFU/pure-auto-grant means only current key-holders can
+ * extend access, never a newcomer granting themself. Run from the bootstrap
+ * ingest effect and on every `family/members` roster change (see
+ * useRealtime.ts) so a newcomer gets keyed the moment ANY online key-holder
+ * observes them.
+ */
+export async function grantKeysToKeylessMembers(
+  family: { id: string; members: FamilyMember[] } | null | undefined,
+  token: string | undefined,
+): Promise<void> {
+  if (!family || !token || !myIdentity) return;
+  const ring = await keyStorage.getRing(family.id);
+  const anchorKey = ring?.[0];
+  if (!anchorKey) return; // don't hold this family's ring — nothing to grant
+
+  const holders = familyMemberKeyHoldersCache[family.id] ?? new Set<string>();
+  for (const member of family.members) {
+    if (holders.has(member.id) || member.id === myUserId) continue;
+    if (!member.publicKey) continue; // hasn't published an identity key yet — nothing to wrap to
+    try {
+      const pairwise = deriveSharedKey(myIdentity.privB64, member.publicKey);
+      const wrapped = await wrapKey(pairwise, anchorKey);
+      await apiGrantFamilyKey(token, family.id, { memberId: member.id, wrapped });
+      holders.add(member.id);
+    } catch (err) {
+      console.warn('[store] grantFamilyKey failed', member.id, err);
+    }
+  }
+  familyMemberKeyHoldersCache[family.id] = holders;
 }
 
 // ── Server <-> store message mapping ─────────────────────────
@@ -1236,6 +1296,15 @@ const lastPostedReadTs = new Map<string, number>();
 export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, seedState);
 
+  // Phase Y — always-current ref to the active family (id + members), read
+  // by the bootstrap-ingest/key-load effects' async `.then()` callbacks
+  // below so the auto-grant sweep uses whichever family is active by the
+  // time each network round-trip resolves, not whatever it was when the
+  // effect closure was created (same "ref mirrors latest render" pattern as
+  // useRealtime.ts's activeFamilyIdRef/groupIdsRef).
+  const familyRef = useRef(state.family);
+  familyRef.current = state.family;
+
   // Load persisted state once on mount.
   useEffect(() => {
     let cancelled = false;
@@ -1351,6 +1420,14 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         applyIncomingFamilyMemberKeys(payload.familyMemberKeys, token, dispatch).catch((err) =>
           console.warn('[store] familyMemberKeys apply failed', err),
         );
+        // Phase Y — if this device holds the active family's ring, auto-grant
+        // it to any keyless member this bootstrap just revealed.
+        if (familyRef.current) {
+          seedFamilyMemberKeyHolders(familyRef.current.id, payload.familyMemberKeyHolders);
+          grantKeysToKeylessMembers(familyRef.current, token).catch((err) =>
+            console.warn('[store] auto-grant sweep failed', err),
+          );
+        }
       })
       .catch((err) => console.warn('[store] bootstrap failed', err));
     return () => {
@@ -1454,6 +1531,15 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
               applyIncomingFamilyMemberKeys(payload.familyMemberKeys, token, dispatch).catch((err) =>
                 console.warn('[store] familyMemberKeys apply failed', err),
               );
+              // Phase Y — this device just confirmed it holds `familyId`'s
+              // ring (that's why we're in this branch) — sweep for any
+              // keyless co-member this bootstrap revealed.
+              if (familyRef.current && familyRef.current.id === familyId) {
+                seedFamilyMemberKeyHolders(familyId, payload.familyMemberKeyHolders);
+                grantKeysToKeylessMembers(familyRef.current, token).catch((err) =>
+                  console.warn('[store] auto-grant sweep failed', err),
+                );
+              }
               // Phase N — replay any rolls this ring hasn't absorbed yet.
               if (!familyKeyRing || familyKeyRing.familyId !== familyId) return;
               const grown = applyKeyRolls(familyKeyRing.keys, payload.keyRolls);
@@ -2045,11 +2131,21 @@ export function useActions() {
 
       /**
        * Families are born E2EE — the server sets `e2ee: true` on the INSERT
-       * itself (no opt-in, no separate enable call). This just generates the
+       * itself (no opt-in, no separate enable call). This generates the
        * local key and stores it (as a fresh one-element ring — index 0, the
-       * anchor) before ever exposing the family to the UI. Returns the raw
-       * key alongside the family so the caller can show/share the extended
-       * invite immediately — it's never retrievable from the server again.
+       * anchor) before ever exposing the family to the UI.
+       *
+       * Phase Y — pure auto-grant: the invite carries no key anymore, so
+       * there's nothing to "show/share" after creation. Instead, this
+       * immediately self-grants — wraps the anchor key to my OWN published
+       * identity key and records it via the exact same grant-key endpoint
+       * the auto-grant sweep uses for everyone else — so the family always
+       * has at least one family_member_keys row from the moment it exists
+       * (the seed of the whole distribution chain: every future member's
+       * key comes from SOME existing holder's device, and this is the
+       * first one). Best-effort: if this device's identity isn't ready yet
+       * for some reason, the family still works locally — the sweep
+       * effects retry once identity resolves.
        */
       // Phase S — a user may already belong to other families when calling
       // this (createFamily/joinFamily reachable as "add another family" from
@@ -2058,8 +2154,10 @@ export function useActions() {
       // FAMILY_ACTIVATE both appends/updates it in `families` and switches
       // `activeFamilyId`/`family` to it, and we push that to api/client.ts's
       // header setter + persist it, same as switchFamily below.
-      createFamily: async (name: string): Promise<{ family: FamilyState; keyB64: string }> => {
+      createFamily: async (name: string): Promise<{ family: FamilyState }> => {
         if (!token) throw new Error('not signed in');
+        const userId = state.session?.userId;
+        if (!userId) throw new Error('not signed in');
         const info = await apiCreateFamily(token, name);
         const familyId = info.family.id;
         const keyB64 = await generateFamilyKey();
@@ -2070,19 +2168,28 @@ export function useActions() {
         dispatch({ type: 'FAMILY_ACTIVATE', family });
         apiSetActiveFamilyId(familyId);
         await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, familyId).catch(() => {});
-        return { family, keyB64 };
+        try {
+          let keypair = myIdentity ?? (await identityKeyStorage.get());
+          if (!keypair) {
+            keypair = generateIdentityKeypair();
+            await identityKeyStorage.set(keypair);
+          }
+          await apiPublishKey(token, keypair.pubB64); // idempotent — ensures the server holds this pubkey before granting against it
+          const pairwise = deriveSharedKey(keypair.privB64, keypair.pubB64);
+          const wrapped = await wrapKey(pairwise, keyB64);
+          await apiGrantFamilyKey(token, familyId, { memberId: userId, wrapped });
+          familyMemberKeyHoldersCache[familyId] = new Set([userId]);
+        } catch (err) {
+          console.warn('[store] self-grant failed', err);
+        }
+        return { family };
       },
 
-      /** `keyB64` comes from parseInvite() when the pasted invite was the extended form (`CODE#K1.<key>`) — always the ORIGINAL anchor key, even for a family that's since rotated; the key-load effect's bootstrap replay walks the roll chain to rebuild the rest of the ring. */
-      joinFamily: async (code: string, keyB64?: string) => {
+      /** Phase Y — join carries no key: the family key arrives only once an existing key-holder's device observes this membership (bootstrap ingest / the `family/members` WS event) and auto-grants it — see grantKeysToKeylessMembers. Messages render locked until then. */
+      joinFamily: async (code: string): Promise<void> => {
         if (!token) throw new Error('not signed in');
         const info = await apiJoinFamily(token, code);
         const family = toFamilyState(info);
-        if (keyB64) {
-          await keyStorage.setRing(family.id, [keyB64]);
-          familyKeyRing = { familyId: family.id, keys: [keyB64] };
-          dispatch({ type: 'SET_HAS_KEY', value: true });
-        }
         dispatch({ type: 'FAMILY_ACTIVATE', family });
         apiSetActiveFamilyId(family.id);
         await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, family.id).catch(() => {});
@@ -2110,28 +2217,6 @@ export function useActions() {
           dispatch({ type: 'BOOTSTRAP', payload });
         } catch (err) {
           console.warn('[store] switchFamily bootstrap failed', err);
-        }
-      },
-
-      /**
-       * "Enter your family key" flow: accepts either a full extended invite
-       * or a bare pasted key, stores it as a fresh one-element ring, then
-       * re-runs bootstrap so every currently-locked message re-maps through
-       * fromServerMessage with the now-populated cache (and so any key rolls
-       * since this key was issued get fixpoint-replayed — see the key-load
-       * effect, which this same family-id state also feeds).
-       */
-      importFamilyKey: async (input: string): Promise<void> => {
-        if (!state.family) throw new Error('not in a family');
-        const keyB64 = parseKeyInput(input);
-        if (!keyB64) throw new Error("That doesn't look like a valid family key");
-        const familyId = state.family.id;
-        await keyStorage.setRing(familyId, [keyB64]);
-        familyKeyRing = { familyId, keys: [keyB64] };
-        dispatch({ type: 'SET_HAS_KEY', value: true });
-        if (token) {
-          const payload = await getBootstrap(token);
-          dispatch({ type: 'BOOTSTRAP', payload });
         }
       },
 

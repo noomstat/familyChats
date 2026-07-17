@@ -13,6 +13,7 @@ import {
   applyIncomingKeyRolls,
   fromServerMessage,
   fromServerNote,
+  grantKeysToKeylessMembers,
   upsertConversation,
   useActiveFamilyId,
   useGroups,
@@ -204,6 +205,29 @@ export function useRealtime(): void {
             // the joiner's own device or after a re-login.
             else if (data.action === 'members' && data.familyId && data.members) {
               dispatch({ type: 'FAMILY_PATCH', patch: { id: data.familyId, members: data.members } });
+              // Phase Y — a fresh join (or any roster change) may have just
+              // added a keyless member: if THIS device holds data.familyId's
+              // ring, sweep and auto-grant them a wrapped copy — same
+              // construction as the bootstrap-ingest sweep, just triggered
+              // live. Not gated on isActiveFamily — a user may hold the ring
+              // for more than one family (Phase S); grantKeysToKeylessMembers
+              // itself is a no-op unless this device actually holds THIS
+              // family's ring.
+              grantKeysToKeylessMembers({ id: data.familyId, members: data.members }, session.token).catch((err) =>
+                console.warn('[realtime] auto-grant sweep failed', err),
+              );
+            }
+            // Phase Y — I (or another co-member sharing this socket) was just
+            // granted a wrapped copy of a family anchor key via the
+            // auto-grant sweep — the server only ever sends this to the
+            // target member (see family.js's grantFamilyKey), so any
+            // delivery here is meant for me.
+            else if (data.action === 'familyMemberKey' && data.familyId && data.wrapped) {
+              applyIncomingFamilyMemberKeys(
+                [{ familyId: data.familyId, wrapped: data.wrapped, wrappedBy: data.wrappedBy, wrappedByPublicKey: data.wrappedByPublicKey ?? null }],
+                session.token,
+                dispatch,
+              ).catch((err) => console.warn('[realtime] familyMemberKey (grant) apply failed', err));
             }
             // Phase N — a member rotated the family key. `roll` carries the
             // wrapped-key envelope; applyIncomingKeyRoll fixpoint-replays it
