@@ -31,6 +31,12 @@ const VARIANTS: Record<ButtonVariant, { bg: string; fg: string; border?: string;
   danger: { bg: semantic.danger, fg: colors.white, shadow: shadow.sm },
 };
 
+/** True when a Button's children are only text (string/number, or an array of them) and so must be wrapped in a <Text>. Elements render as-is. */
+function isTextLabel(children: React.ReactNode): boolean {
+  const kids = React.Children.toArray(children);
+  return kids.length > 0 && kids.every((c) => typeof c === 'string' || typeof c === 'number');
+}
+
 /** FamilyChats Button — the primary action control. Coral "signal" fill for primary; friendly pill geometry. */
 export function Button({
   children,
@@ -75,7 +81,14 @@ export function Button({
         ]}
       >
         {leadingIcon}
-        {typeof children === 'string' ? (
+        {/* Wrap the label in <Text> whenever it's text-like — a bare string,
+            a number, OR an array of them (e.g. `Add {thb(x)}` compiles to
+            ["Add ", "฿123"], whose typeof is "object"). The old
+            `typeof children === 'string'` check missed the array case, so those
+            labels rendered bare and crashed on native with "Text strings must
+            be rendered within a <Text>". Non-text children (a custom element)
+            still render as-is. */}
+        {isTextLabel(children) ? (
           <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: s.fontSize, color: v.fg }}>{children}</Text>
         ) : (
           children
