@@ -9,8 +9,30 @@
 // The server sends the receipt image (as a base64 data URL) to the model and
 // asks for a strict JSON object; nothing is stored by Groq beyond the request.
 import fs from 'node:fs/promises';
+import sharp from 'sharp';
 
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1';
+
+// Vision models bill by image resolution, and Groq's free tier is a tight
+// tokens-per-minute budget — a full-res phone photo alone can blow past it and
+// 429. Downscale to a readable-but-small JPEG JUST for the OCR call (the
+// full-quality original stays on disk for display). `.rotate()` applies the
+// EXIF orientation phone cameras set, so the text isn't sideways to the model.
+async function ocrImageDataUrl(absFilePath) {
+  try {
+    const buf = await sharp(absFilePath)
+      .rotate()
+      .resize({ width: 900, height: 900, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 65 })
+      .toBuffer();
+    return `data:image/jpeg;base64,${buf.toString('base64')}`;
+  } catch {
+    // If sharp can't process it, fall back to the raw file — better a possible
+    // 429 than no scan at all.
+    const raw = await fs.readFile(absFilePath);
+    return `data:image/jpeg;base64,${raw.toString('base64')}`;
+  }
+}
 
 function unavailable(message) {
   const err = new Error(message);
@@ -48,8 +70,7 @@ export async function scanReceipt(absFilePath, mimetype = 'image/jpeg') {
   if (!model) throw unavailable('receipt OCR is not configured (GROQ_MODEL missing)');
   const baseUrl = process.env.GROQ_BASE_URL || DEFAULT_BASE_URL;
 
-  const bytes = await fs.readFile(absFilePath);
-  const dataUrl = `data:${mimetype};base64,${bytes.toString('base64')}`;
+  const dataUrl = await ocrImageDataUrl(absFilePath);
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
