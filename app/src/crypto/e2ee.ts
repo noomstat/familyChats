@@ -21,7 +21,8 @@ const NONCE_BYTES = 24; // XChaCha20's extended nonce
 const B64_STD = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const B64_URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
-function bytesToBase64(bytes: Uint8Array, urlSafe = false): string {
+/** Exported so components can build a `data:<mime>;base64,…` URI straight from decryptBytes' output (see EncryptedImage) without duplicating the codec. */
+export function bytesToBase64(bytes: Uint8Array, urlSafe = false): string {
   const alphabet = urlSafe ? B64_URL : B64_STD;
   let out = '';
   let i = 0;
@@ -88,6 +89,16 @@ export interface E2eePayload {
   loc?: { label: string; meta?: string; live?: boolean };
   /** Phase P — a shared family note's title+body, encrypted together into one envelope. */
   note?: { title: string; body: string };
+  /**
+   * Phase Z — a friend-chat attachment's metadata (filename/mime/size never
+   * ride in plaintext). `nonce` is the base64 XChaCha20-Poly1305 nonce
+   * `encryptBytes` used for the SEPARATE ciphertext blob uploaded as the
+   * message's `mediaPath` — this envelope (the message `body`) only ever
+   * carries metadata, never the file bytes themselves. `w`/`h` are set for
+   * an `image/*` file when known (picker-reported dimensions), so the
+   * receiving bubble can lay out its placeholder before the blob downloads.
+   */
+  file?: { name: string; mime: string; size: number; nonce: string; w?: number; h?: number };
 }
 
 /** True if `body` looks like an E2EE envelope (any version) — cheap prefix check. */
@@ -142,6 +153,41 @@ export function decryptPayloadWithKeys(keys: string[], envelope: string): E2eePa
     if (result) return result;
   }
   return null;
+}
+
+// ── raw-byte encrypt/decrypt (Phase Z — attachment file contents) ─────
+//
+// Same cipher (XChaCha20-Poly1305) and nonce size as encryptPayload/
+// decryptPayload above, but over raw bytes instead of a JSON-then-utf8
+// payload, and returning the nonce/ciphertext separately instead of a single
+// wire-format string — the caller uploads the ciphertext as a file (message
+// `mediaPath`) and ships the nonce inside the SEPARATE `e2e:1:` metadata
+// envelope (message `body`, via E2eePayload.file.nonce above), since a
+// message body and an uploaded file are two different wire slots.
+
+/** Encrypts raw `bytes` (e.g. a picked photo/file's contents) under `keyB64`. Returns the random nonce used (base64) alongside the ciphertext. */
+export async function encryptBytes(keyB64: string, bytes: Uint8Array): Promise<{ nonceB64: string; ciphertext: Uint8Array }> {
+  const key = base64ToBytes(keyB64);
+  const nonce = await getRandomBytes(NONCE_BYTES);
+  const ciphertext = xchacha20poly1305(key, nonce).encrypt(bytes);
+  return { nonceB64: bytesToBase64(nonce), ciphertext };
+}
+
+/**
+ * Decrypts `ciphertext` (as produced by encryptBytes) using `keyB64` and the
+ * `nonceB64` that rode alongside it in the metadata envelope. Returns null on
+ * ANY failure (bad key length, tampered ciphertext, wrong key) — same
+ * "never throw, render locked/failed" contract as decryptPayload.
+ */
+export function decryptBytes(keyB64: string, nonceB64: string, ciphertext: Uint8Array): Uint8Array | null {
+  try {
+    const key = base64ToBytes(keyB64);
+    const nonce = base64ToBytes(nonceB64);
+    if (key.length !== KEY_BYTES || nonce.length !== NONCE_BYTES) return null;
+    return xchacha20poly1305(key, nonce).decrypt(ciphertext);
+  } catch {
+    return null;
+  }
 }
 
 // ── key rotation: wrap/unwrap a whole key under another key ───

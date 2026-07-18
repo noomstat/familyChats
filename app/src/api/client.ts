@@ -184,7 +184,7 @@ export interface ServerMessage {
   id: string;
   groupId: string;
   authorId: string;
-  kind: 'text' | 'loc' | 'voice';
+  kind: 'text' | 'loc' | 'voice' | 'file';
   body: string | null;
   loc: ServerLoc | null;
   mediaPath: string | null;
@@ -774,6 +774,30 @@ export function uploadVoice(
     id,
     durationMs: durationMs != null ? String(durationMs) : undefined,
   });
+}
+
+// ── Encrypted attachments (Phase Z) ─────────────────────────────
+//
+// Friend-chat photo/file sharing. `fileUri` points at bytes ALREADY
+// encrypted client-side (see AppStore.tsx's sendAttachment + crypto/e2ee.ts's
+// encryptBytes) — this just uploads that ciphertext blob (opaque
+// application/octet-stream, since the server's uploadEncrypted has no mime
+// allowlist) alongside `body`, the e2e:1: metadata envelope (name/mime/size/
+// nonce — never plaintext). Mirrors uploadVoice's shape exactly.
+
+/** Multipart upload of one ALREADY-ENCRYPTED attachment blob as a friend-chat message. Client id + the metadata envelope ride along as text fields. */
+export function postAttachment(
+  token: string,
+  groupId: string,
+  input: { id: string; body: string; fileUri: string; fileName: string },
+) {
+  const { id, body, fileUri, fileName } = input;
+  return uploadFile<{ message: ServerMessage }>(
+    token,
+    `/groups/${groupId}/attachment`,
+    { uri: fileUri, name: fileName, mimeType: 'application/octet-stream' },
+    { id, body },
+  );
 }
 
 // ── Memory Timeline (Phase H) ─────────────────────────────────

@@ -15,15 +15,21 @@ export interface Message {
   authorId: string;
   /** Best-effort display name, resolved from family members when known. */
   authorName?: string;
-  kind: 'text' | 'loc' | 'voice';
+  kind: 'text' | 'loc' | 'voice' | 'file';
   text?: string;
   live?: boolean;
   loc?: { label: string; meta?: string };
-  /** Voice messages only: '/uploads/<name>' once uploaded, or a local file:/blob:/data: uri
-   * right after recording (before the upload round-trip replaces it with the server path). */
+  /** Voice/file messages only: '/uploads/<name>' once uploaded, or a local file:/blob:/data: uri
+   * right after recording/picking (before the upload round-trip replaces it with the server path).
+   * For `kind: 'file'`, this is the ENCRYPTED blob path — never render/play it directly; decrypt
+   * first (see EncryptedImage / the file-chip tap handler in FriendThreadScreen). */
   mediaPath?: string;
   /** Voice messages only: clip length in ms. */
   durationMs?: number;
+  /** `kind: 'file'` only — the metadata decrypted out of `body` (filename/mime/size/nonce never
+   * ride in plaintext). Metadata-only: the actual bytes are fetched/decrypted lazily by the
+   * rendering bubble, not here. Undefined for a locked (undecryptable) file message. */
+  file?: { name: string; mime: string; size: number; nonce: string; w?: number; h?: number };
   /** True when this message's body is an E2EE envelope we couldn't decrypt
    * (no family key yet, or the wrong one). `text`/`loc` are left undefined —
    * the thread renders a locked bubble instead of the raw ciphertext. */

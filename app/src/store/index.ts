@@ -24,6 +24,7 @@ export {
   useSessionReady,
   useE2EE,
   useConversationKeyReady,
+  useConversationKey,
   useGrocery,
   useTasks,
   useEvents,

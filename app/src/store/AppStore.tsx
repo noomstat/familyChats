@@ -2,6 +2,15 @@ import React, { createContext, useContext, useEffect, useMemo, useReducer, useRe
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
+// Phase Z — attachment temp-file I/O (encrypt-before-upload on send,
+// decrypt-to-temp-then-share on receive). Only actually CALLED on native —
+// every use site guards with `Platform.OS !== 'web'` first, since the web
+// build's File/Directory classes are unimplemented stubs (see
+// node_modules/expo-file-system's ExpoFileSystem.web.d.ts) — importing them
+// unconditionally is safe (expo-file-system ships a web-compatible module,
+// so `expo export --platform web` still bundles), only INVOKING their
+// methods on web would throw.
+import { File, Paths } from 'expo-file-system';
 import {
   CATEGORIES,
   CategoryMeta,
@@ -17,7 +26,7 @@ import {
 import { tokenStorage } from './tokenStorage';
 import { keyStorage } from './keyStorage';
 import { identityKeyStorage } from './identityKeyStorage';
-import { decryptPayload, decryptPayloadWithKeys, encryptPayload, generateFamilyKey, isEnvelope, unwrapKey, wrapKey } from '../crypto/e2ee';
+import { decryptBytes, decryptPayload, decryptPayloadWithKeys, encryptBytes, encryptPayload, generateFamilyKey, isEnvelope, unwrapKey, wrapKey } from '../crypto/e2ee';
 import { buildFriendCode, deriveSharedKey, generateIdentityKeypair, parseFriendCode } from '../crypto/friends';
 import {
   BootstrapResponse,
@@ -72,6 +81,7 @@ import {
   leaveFamily as apiLeaveFamily,
   leaveFriendGroup as apiLeaveFriendGroup,
   openDm as apiOpenDm,
+  postAttachment,
   postKeyRoll,
   postMessage,
   postRead,
@@ -604,6 +614,7 @@ export function fromServerMessage(sm: ServerMessage): Message {
           text: decrypted.text,
           loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
           live: decrypted.loc?.live,
+          file: decrypted.file,
         };
       }
       return { ...base, cipher, locked: true };
@@ -622,6 +633,7 @@ export function fromServerMessage(sm: ServerMessage): Message {
         text: decrypted.text,
         loc: decrypted.loc ? { label: decrypted.loc.label, meta: decrypted.loc.meta } : undefined,
         live: decrypted.loc?.live,
+        file: decrypted.file,
       };
     }
     // No key yet, or decrypt failed (tamper/wrong key) — render locked. The
@@ -739,6 +751,49 @@ type Action =
   | { type: 'LOGOUT' };
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+// ── Phase Z — attachment byte I/O ─────────────────────────────
+//
+// A picked photo/file's local uri is file:// on native, blob:/data: on web
+// (mirrors uploadFile/VoiceBubble's sourceUri split). Reading is universal
+// (fetch works against all of file:/blob:/data: — same trick client.ts's
+// uploadFile already relies on for its web branch), so only WRITING the
+// encrypted-blob temp file for upload needs a platform split: native writes
+// a real temp file via expo-file-system's File class; web has no usable
+// filesystem, so it hands back a blob: object URL instead — either way the
+// caller gets back a plain `uri` string it can feed straight into
+// postAttachment's `fileUri` (which itself already knows how to upload
+// both shapes, via uploadFile's existing native-descriptor/web-blob split).
+
+/** Reads a locally-picked file's raw bytes (native `file://` uri or web `blob:`/`data:` uri). */
+async function readLocalBytes(uri: string): Promise<Uint8Array> {
+  if (Platform.OS === 'web') {
+    const buf = await (await fetch(uri)).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  return new File(uri).bytes();
+}
+
+/**
+ * Writes `bytes` somewhere uploadFile can read them back from, returning the
+ * resulting uri plus a `cleanup()` to release it once the upload settles.
+ * Native: a real temp file under the cache directory. Web: an in-memory
+ * blob: object URL (no filesystem access available there at all).
+ */
+async function bytesToUploadUri(bytes: Uint8Array, name: string): Promise<{ uri: string; cleanup: () => void }> {
+  if (Platform.OS === 'web') {
+    // Cast needed: TS's Uint8Array<ArrayBufferLike> vs. BlobPart's stricter
+    // Uint8Array<ArrayBuffer> — a runtime non-issue (Blob accepts any typed
+    // array), just a lib.dom typing mismatch.
+    const blob = new Blob([bytes as BlobPart], { type: 'application/octet-stream' });
+    const uri = URL.createObjectURL(blob);
+    return { uri, cleanup: () => URL.revokeObjectURL(uri) };
+  }
+  const file = new File(Paths.cache, name);
+  if (file.exists) file.delete();
+  file.write(bytes);
+  return { uri: file.uri, cleanup: () => { try { file.delete(); } catch { /* best-effort */ } } };
+}
 
 function dropGroup(state: AppState, groupId: string): AppState {
   const { [groupId]: _g, ...groups } = state.groups;
@@ -1646,6 +1701,58 @@ export function useActions() {
         uploadVoice(token, groupId, { uri: input.uri, name: input.name, mimeType: input.mimeType, id, durationMs: input.durationMs })
           .then(({ message }) => dispatch({ type: 'MERGE_MESSAGES', messages: [fromServerMessage(message)] }))
           .catch((err) => console.warn('[store] sendVoice failed', err));
+      },
+
+      /**
+       * Phase Z — encrypted photo/file sharing (friend chat only — every
+       * friends-kind conversation already requires a resolved key to send
+       * anything, same guard as sendMessage/sendLocation). Optimistic local
+       * message renders straight from the picked LOCAL uri (mediaPath) —
+       * EncryptedImage/the file chip both recognize a file:/blob:/data: uri
+       * as "already plaintext, skip decrypt" (mirrors VoiceBubble's
+       * sourceUri split). The real work: read the picked bytes, encrypt them
+       * under the conversation key, upload the ciphertext as the message's
+       * media, and post a metadata-only envelope (name/mime/size/nonce —
+       * never plaintext) as the body. On success, MERGE_MESSAGES upserts the
+       * same id with the server row (its '/uploads/…' ciphertext mediaPath +
+       * real nonce win) — same "fill in the real thing from the response"
+       * pattern as sendVoice.
+       */
+      sendAttachment: (groupId: string, asset: { uri: string; name: string; mime: string; size: number; w?: number; h?: number }) => {
+        const authorId = state.session?.userId;
+        if (!authorId || !token) return;
+        const key = outgoingKeyFor(state.groups[groupId], state.family);
+        if (!key) return; // composer gates on useConversationKeyReady — this guard just defends against a stale call
+        const id = uid();
+        const msg: Message = {
+          id,
+          groupId,
+          authorId,
+          kind: 'file',
+          mediaPath: asset.uri,
+          file: { name: asset.name, mime: asset.mime, size: asset.size, nonce: '', w: asset.w, h: asset.h },
+          ts: Date.now(),
+        };
+        dispatch({ type: 'MERGE_MESSAGES', messages: [msg] });
+
+        (async () => {
+          let cleanup: (() => void) | undefined;
+          try {
+            const bytes = await readLocalBytes(asset.uri);
+            const { nonceB64, ciphertext } = await encryptBytes(key, bytes);
+            const body = await encryptPayload(key, {
+              file: { name: asset.name, mime: asset.mime, size: asset.size, nonce: nonceB64, w: asset.w, h: asset.h },
+            });
+            const uploaded = await bytesToUploadUri(ciphertext, `${id}.bin`);
+            cleanup = uploaded.cleanup;
+            const { message } = await postAttachment(token, groupId, { id, body, fileUri: uploaded.uri, fileName: `${id}.bin` });
+            dispatch({ type: 'MERGE_MESSAGES', messages: [fromServerMessage(message)] });
+          } catch (err) {
+            console.warn('[store] sendAttachment failed', err);
+          } finally {
+            cleanup?.();
+          }
+        })();
       },
 
       startLive: (groupId: string, expiresLabel: string) => dispatch({ type: 'START_LIVE', groupId, expiresLabel }),
@@ -2645,6 +2752,19 @@ export function useConversationKeyReady(groupId: string | undefined): boolean {
   // re-evaluate on every store change — see the comment above.
   void state;
   return !!groupId && !!resolvedConvoKeys[groupId];
+}
+
+/**
+ * Phase Z — the actual resolved key for a friends-kind conversation (not
+ * just whether one is ready — see useConversationKeyReady above), for
+ * components that need to decrypt something themselves (EncryptedImage, the
+ * file-chip open/share handler) rather than just gating a composer. Same
+ * module-level-cache-read-on-every-store-change mechanism.
+ */
+export function useConversationKey(groupId: string | undefined): string | null {
+  const { state } = useCtx();
+  void state;
+  return (groupId && resolvedConvoKeys[groupId]) || null;
 }
 
 /** The shared grocery list, sorted unchecked-first then by creation order. */
