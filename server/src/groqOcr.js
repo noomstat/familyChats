@@ -57,6 +57,23 @@ function parseTotal(v) {
 
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
+/** Pull a JSON object out of a model's reply — tolerant of ```json fences, a
+ * <think>…</think> reasoning prefix, or surrounding prose. Returns null if
+ * nothing parses. */
+function extractJson(content) {
+  let s = String(content).replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * OCR a receipt image on disk. Returns `{ merchant, total, currency, date }`
  * (any field may be null). Throws (status 503) if GROQ_API_KEY isn't set, and
@@ -78,8 +95,13 @@ export async function scanReceipt(absFilePath, mimetype = 'image/jpeg') {
     body: JSON.stringify({
       model,
       temperature: 0,
-      max_tokens: 300,
-      response_format: { type: 'json_object' },
+      max_tokens: 500,
+      // qwen3 (and other Groq reasoning models) emit <think>…</think> before
+      // the answer, which breaks Groq's strict json_object response_format
+      // ("Failed to validate JSON") on non-trivial receipts. Turn reasoning
+      // off and parse the JSON out of the content ourselves (extractJson) so
+      // this works across reasoning and non-reasoning vision models alike.
+      reasoning_effort: 'none',
       messages: [
         {
           role: 'user',
@@ -101,12 +123,8 @@ export async function scanReceipt(absFilePath, mimetype = 'image/jpeg') {
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error('Groq OCR returned no content');
 
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error('Groq OCR returned non-JSON content');
-  }
+  const parsed = extractJson(content);
+  if (!parsed) throw new Error('Groq OCR returned non-JSON content');
 
   return {
     merchant: str(parsed.merchant),
