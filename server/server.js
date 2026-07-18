@@ -48,6 +48,7 @@ import {
   removePhoto,
 } from './src/albums.js';
 import { getTimeline } from './src/timeline.js';
+import { scanReceipt } from './src/groqOcr.js';
 import { addExpense, removeExpense, addTransfer, setBudget, remind, listCategories, addCategory, removeCategory } from './src/finance.js';
 
 await getBoss(); // ensure queues exist so producer sends succeed
@@ -879,7 +880,16 @@ app.post('/finance/scan-receipt', requireAuth, resolveFamily, upload.single('fil
       return res.status(400).json({ error: `expected an image file, got ${req.file.mimetype}` });
     }
     const receiptPath = `/uploads/${req.file.filename}`;
-    res.json({ receiptPath });
+    // Best-effort OCR via Groq — the photo is always kept and returned even
+    // if the scan fails/isn't configured (graceful-degrade to manual entry).
+    let scan = null;
+    let scanError;
+    try {
+      scan = await scanReceipt(req.file.path, req.file.mimetype);
+    } catch (err) {
+      scanError = err?.message || 'receipt scan failed';
+    }
+    res.json(scanError ? { receiptPath, scan, scanError } : { receiptPath, scan });
   } catch (err) {
     if (req.file) await unlink(req.file.path).catch(() => {});
     next(err);

@@ -497,9 +497,18 @@ function AddExpenseSheet({
     const name = asset.fileName ?? `receipt-${Date.now()}.${mimeType.split('/')[1] ?? 'jpg'}`;
     setAttaching(true);
     try {
-      const { receiptPath: uploadedPath } = await actions.uploadReceipt({ uri: asset.uri, name, mimeType });
+      const { receiptPath: uploadedPath, scan, scanError } = await actions.uploadReceipt({ uri: asset.uri, name, mimeType });
       setReceiptPath(uploadedPath);
       setPreviewUri(asset.uri);
+      // Groq OCR auto-fill — only fill fields the user hasn't already typed.
+      if (scan && (scan.merchant || scan.total != null)) {
+        if (scan.merchant && !label.trim()) setLabel(scan.merchant);
+        if (scan.total != null && !amountStr.trim()) setAmountStr(String(scan.total));
+        const parts = [scan.merchant, scan.total != null ? thb(scan.total) : null].filter(Boolean);
+        setAttachHint(parts.length ? `Scanned: ${parts.join(' · ')}` : 'Receipt attached.');
+      } else {
+        setAttachHint(scanError ? 'Receipt saved — couldn’t read it automatically.' : 'Receipt attached.');
+      }
     } catch (err) {
       setAttachHint(err instanceof Error ? err.message : 'Could not attach the receipt.');
     } finally {
@@ -545,7 +554,7 @@ function AddExpenseSheet({
           disabled={attaching}
           onPress={attachReceipt}
         >
-          {attaching ? 'Attaching…' : 'Attach receipt'}
+          {attaching ? 'Scanning…' : 'Scan receipt'}
         </Button>
         {!!previewUri && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>

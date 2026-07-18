@@ -693,8 +693,19 @@ export interface ServerBudget {
   amount: number;
 }
 
+/** Fields extracted from a receipt photo by the server's Groq OCR (any may be null). */
+export interface ReceiptScan {
+  merchant: string | null;
+  total: number | null;
+  currency: string | null;
+  date: string | null;
+}
+
 export interface UploadReceiptResponse {
   receiptPath: string;
+  /** Present when OCR ran (may hold null fields); absent/`scanError` set when OCR is unconfigured or failed. */
+  scan?: ReceiptScan | null;
+  scanError?: string;
 }
 
 /**

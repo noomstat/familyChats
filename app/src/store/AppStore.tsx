@@ -1878,9 +1878,9 @@ export function useActions() {
       },
 
       /** Upload a receipt photo for manual expense entry — returns its stored path. */
-      uploadReceipt: async (image: UploadFile): Promise<{ receiptPath: string }> => {
+      uploadReceipt: async (image: UploadFile) => {
         if (!token) throw new Error('not signed in');
-        return apiUploadReceipt(token, image);
+        return apiUploadReceipt(token, image); // -> { receiptPath, scan?, scanError? } (Groq OCR)
       },
 
       // ── Custom expense categories (Phase R) ───────────────────
