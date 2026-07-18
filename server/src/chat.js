@@ -362,23 +362,29 @@ export async function getMessages(groupId, userId, { before, limit = DEFAULT_MES
  *
  * `mediaPath`/`durationMs` are for `kind: 'voice'` (Phase F) — a public
  * '/uploads/<name>' path and the clip length in ms. Both are simply columns
- * that ride along; text/loc messages pass them as null.
+ * that ride along; text/loc messages pass them as null. Phase Z reuses
+ * `mediaPath` for `kind: 'file'` too, except there it's a ciphertext blob
+ * (`durationMs` stays null) — `body` carries the encrypted metadata
+ * envelope instead (see the E2EE enforcement below).
  */
 export async function createMessage({ id, groupId, authorId, kind = 'text', body, loc, live, mediaPath, durationMs }) {
   if (!id) throw badRequest('id is required');
   const group = await assertMember(groupId, authorId);
-  if (!['text', 'loc', 'voice'].includes(kind)) throw badRequest('invalid kind');
+  if (!['text', 'loc', 'voice', 'file'].includes(kind)) throw badRequest('invalid kind');
 
   // E2EE enforcement (server never decrypts — it only checks shape): once a
-  // family has turned encryption on, its text/loc messages MUST arrive as an
-  // envelope — and Phase V: EVERY friend conversation (no family, no opt-in)
-  // is unconditionally encrypted, since there's no server-held key to fall
-  // back to. `||` short-circuits familyE2EE(group.family_id) — never called
-  // for a friends-kind group, where family_id is NULL anyway. Voice stays
-  // unencrypted in v1 (files, not covered — see plan's out-of-scope list),
-  // so it's exempt. An encrypted loc message carries its {label, meta, live}
-  // inside the envelope instead of the `loc` column — the app-side mapping
-  // reads it back out of the decrypted body.
+  // family has turned encryption on, its text/loc/file messages MUST arrive
+  // as an envelope — and Phase V: EVERY friend conversation (no family, no
+  // opt-in) is unconditionally encrypted, since there's no server-held key
+  // to fall back to. `||` short-circuits familyE2EE(group.family_id) — never
+  // called for a friends-kind group, where family_id is NULL anyway. Voice
+  // stays unencrypted in v1, so it's exempt. Phase Z's `kind: 'file'` bodies
+  // are the metadata envelope (name/mime/size/nonce) — the file BYTES
+  // themselves are encrypted separately (client-side, under the same
+  // conversation key) before upload and never touch this function; see
+  // POST /groups/:id/attachment. An encrypted loc message carries its
+  // {label, meta, live} inside the envelope instead of the `loc` column —
+  // the app-side mapping reads it back out of the decrypted body.
   const needsE2ee = group.kind === 'friends' || (await familyE2EE(group.family_id));
   if (kind !== 'voice' && needsE2ee && !isEnvelope(body)) {
     throw badRequest('this conversation requires encrypted messages');

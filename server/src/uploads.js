@@ -60,3 +60,16 @@ function fileFilter(_req, file, cb) {
  * server.js's error handler maps err.name === 'MulterError' to 400.
  */
 export const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_FILE_BYTES } });
+
+/**
+ * Phase Z — friend-chat attachments (photos + arbitrary files), end-to-end
+ * encrypted client-side before upload: what lands on disk is XChaCha20-
+ * Poly1305 ciphertext, never a real image/audio/whatever mime, so `upload`'s
+ * ALLOWED_MIME allowlist (which exists to sanity-check REAL media types)
+ * doesn't apply here — the client always sends `application/octet-stream`
+ * and there is deliberately no fileFilter. Same disk storage + 10 MB cap +
+ * uuid filenames as `upload`; a separate multer instance only so `upload`
+ * itself (and its allowlist, relied on by voice/album/receipt uploads)
+ * stays untouched.
+ */
+export const uploadEncrypted = multer({ storage, limits: { fileSize: MAX_FILE_BYTES } });

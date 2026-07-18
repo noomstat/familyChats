@@ -37,7 +37,7 @@ import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js'
 import { listNotes, addNote, updateNote, removeNote } from './src/notes.js';
 import { publishKey, getFriends, getMyFriendCode, connectByQr } from './src/friends.js';
 import { openDm, createFriendGroup, addFriendGroupMember, leaveFriendGroup, renameFriendGroup } from './src/friendChat.js';
-import { upload, UPLOADS_DIR } from './src/uploads.js';
+import { upload, uploadEncrypted, UPLOADS_DIR } from './src/uploads.js';
 import {
   listAlbums,
   createAlbum,
@@ -330,6 +330,43 @@ app.post('/groups/:id/voice', requireAuth, resolveFamily, upload.single('file'),
       kind: 'voice',
       mediaPath,
       durationMs: Number(durationMs) || null,
+    });
+
+    // A duplicate `id` (client retry) returns the already-stored row untouched
+    // — this upload's file was never referenced by it, so it's an orphan.
+    if (!message || message.mediaPath !== mediaPath) {
+      await unlink(req.file.path).catch(() => {});
+    }
+
+    res.status(201).json({ message });
+  } catch (err) {
+    if (req.file) await unlink(req.file.path).catch(() => {});
+    next(err);
+  }
+});
+
+// Phase Z — friend-chat photo/file attachments. Multipart: field `file` (the
+// ALREADY-ENCRYPTED bytes — ciphertext, uploaded via uploadEncrypted so no
+// mime allowlist applies) + text field `body` (the `e2e:1:` metadata
+// envelope: name/mime/size/nonce, never plaintext filename). Same shape as
+// the voice route above: the file is already on disk when the handler runs,
+// so a duplicate `id` (client retry) or a failed insert gets its orphan
+// blob unlinked. `createMessage`'s existing E2EE enforcement already 400s a
+// plaintext `body` for `kind: 'file'` in any friends/e2ee conversation —
+// there is no other kind of conversation this route is ever used from.
+app.post('/groups/:id/attachment', requireAuth, resolveFamily, uploadEncrypted.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file is required' });
+
+    const { id, body } = req.body ?? {};
+    const mediaPath = `/uploads/${req.file.filename}`;
+    const message = await createMessage({
+      id,
+      groupId: req.params.id,
+      authorId: req.user.id,
+      kind: 'file',
+      body,
+      mediaPath,
     });
 
     // A duplicate `id` (client retry) returns the already-stored row untouched
