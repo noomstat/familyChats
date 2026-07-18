@@ -4,20 +4,31 @@
 // per-conversation key (see store/AppStore.tsx) instead of the family
 // keyring, and by friend/member names instead of family membership.
 import React, { useCallback, useMemo, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+// Phase Z — decrypt-to-temp-then-share for a non-image file chip. Only
+// actually invoked on native (see FileChip's openFile) — the web build gets
+// a Blob + object-URL download instead, since expo-file-system's File class
+// is an unimplemented stub there. Importing it unconditionally is safe (see
+// AppStore.tsx's identical comment on this same import).
+import { File, Paths } from 'expo-file-system';
 import { colors, semantic, fontFamily, radius, shadow } from '../theme';
 import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { ChatBubble, VoiceBubble } from '../components/chat';
+import { ChatBubble, EncryptedImage, VoiceBubble } from '../components/chat';
 import { LocationTile, LivePill } from '../components/location';
+import { fileUrl } from '../api/client';
+import { decryptBytes } from '../crypto/e2ee';
 import {
   ChatGroup,
   Message,
   friendConvoDisplayName,
   useActions,
+  useConversationKey,
   useConversationKeyReady,
   useFriends,
   useLive,
@@ -37,11 +48,13 @@ export function FriendThreadScreen({ route, navigation }: Props) {
   const cursors = useReadCursors(group.id);
   const actions = useActions();
   const keyReady = useConversationKeyReady(group.id);
+  const convoKey = useConversationKey(group.id);
   const live = useLive(group.id);
   const sharing = !!live;
   const [draft, setDraft] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [attachSheetOpen, setAttachSheetOpen] = useState(false);
   const isFocusedRef = React.useRef(false);
 
   const nameOf = useCallback((id: string) => group.memberNames?.[id] ?? friends.find((f) => f.id === id)?.name ?? id, [group.memberNames, friends]);
@@ -74,6 +87,35 @@ export function FriendThreadScreen({ route, navigation }: Props) {
     setShareSheetOpen(false);
     actions.startLive(group.id, dur === 'until stopped' ? 'Sharing until stopped' : dur + ' left');
     actions.sendLocation(group.id, 'Your live location', 'Sharing · ' + dur, true);
+  };
+
+  const pickPhoto = async () => {
+    setAttachSheetOpen(false);
+    if (!keyReady) return;
+    if (Platform.OS !== 'web') {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7, allowsMultipleSelection: false });
+    if (result.canceled || !result.assets.length) return;
+    const asset = result.assets[0];
+    const mime = asset.mimeType ?? 'image/jpeg';
+    const name = asset.fileName ?? `photo-${Date.now()}.${mime.split('/')[1] ?? 'jpg'}`;
+    actions.sendAttachment(group.id, { uri: asset.uri, name, mime, size: asset.fileSize ?? 0, w: asset.width, h: asset.height });
+  };
+
+  const pickFile = async () => {
+    setAttachSheetOpen(false);
+    if (!keyReady) return;
+    const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    actions.sendAttachment(group.id, {
+      uri: asset.uri,
+      name: asset.name,
+      mime: asset.mimeType ?? 'application/octet-stream',
+      size: asset.size ?? 0,
+    });
   };
 
   const receiptFor = (m: Message): { read: number; total: number } => {
@@ -114,7 +156,13 @@ export function FriendThreadScreen({ route, navigation }: Props) {
           contentContainerStyle={{ padding: 14, gap: 10 }}
           style={{ backgroundColor: semantic.surfacePage }}
           renderItem={({ item }) => (
-            <FriendChatMsg m={item} mine={item.authorId === session?.userId} authorName={item.authorName ?? nameOf(item.authorId)} receipt={item.authorId === session?.userId ? receiptFor(item) : undefined} />
+            <FriendChatMsg
+              m={item}
+              mine={item.authorId === session?.userId}
+              authorName={item.authorName ?? nameOf(item.authorId)}
+              receipt={item.authorId === session?.userId ? receiptFor(item) : undefined}
+              convoKey={convoKey}
+            />
           )}
           ListEmptyComponent={
             <Text style={{ textAlign: 'center', color: semantic.textFaint, padding: 40, fontSize: 13 }}>
@@ -132,6 +180,13 @@ export function FriendThreadScreen({ route, navigation }: Props) {
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 12, backgroundColor: semantic.surfaceCard, borderTopWidth: 1, borderTopColor: semantic.borderSubtle }}>
           <IconButton
+            name="paperclip"
+            variant="soft"
+            accessibilityLabel="Attach a photo or file"
+            disabled={!keyReady}
+            onPress={() => setAttachSheetOpen(true)}
+          />
+          <IconButton
             name={sharing ? 'navigation' : 'map-pin'}
             variant={sharing ? 'live' : 'soft'}
             accessibilityLabel="Share location"
@@ -146,6 +201,7 @@ export function FriendThreadScreen({ route, navigation }: Props) {
       </KeyboardAvoidingView>
 
       {shareSheetOpen && <FriendShareSheet onClose={() => setShareSheetOpen(false)} onConfirm={confirmShare} />}
+      {attachSheetOpen && <AttachSheet onClose={() => setAttachSheetOpen(false)} onPickPhoto={pickPhoto} onPickFile={pickFile} />}
       {settingsOpen && (
         <FriendGroupSettingsSheet group={group} onClose={() => setSettingsOpen(false)} onLeft={() => navigation.navigate('FriendsList')} />
       )}
@@ -185,7 +241,145 @@ function FriendShareSheet({ onClose, onConfirm }: { onClose: () => void; onConfi
   );
 }
 
-function FriendChatMsg({ m, mine, authorName, receipt }: { m: Message; mine: boolean; authorName: string; receipt?: { read: number; total: number } }) {
+/** Phase Z — the attach affordance's action sheet: Photo (image library, downscaled) or File (any type). */
+function AttachSheet({ onClose, onPickPhoto, onPickFile }: { onClose: () => void; onPickPhoto: () => void; onPickFile: () => void }) {
+  const opts: [string, string, () => void][] = [
+    ['image', 'Photo', onPickPhoto],
+    ['file-text', 'File', onPickFile],
+  ];
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(26,22,19,0.4)', justifyContent: 'flex-end' }}>
+      <Pressable style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} onPress={onClose} />
+      <View style={{ backgroundColor: semantic.surfaceCard, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30, ...shadow.xl }}>
+        <View style={{ width: 40, height: 4, borderRadius: 99, backgroundColor: semantic.borderStrong, alignSelf: 'center', marginBottom: 16 }} />
+        <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 20, color: semantic.textStrong, marginBottom: 4 }}>Attach</Text>
+        <Text style={{ fontSize: 14, color: semantic.textMuted, marginBottom: 16 }}>
+          Encrypted end-to-end, same as your messages — the server only ever sees ciphertext.
+        </Text>
+        <View style={{ gap: 8 }}>
+          {opts.map(([icon, label, onPress]) => (
+            <Pressable
+              key={label}
+              onPress={onPress}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 18, borderRadius: radius.md, borderWidth: 1, borderColor: semantic.borderDefault, backgroundColor: semantic.surfacePage }}
+            >
+              <Icon name={icon} size={19} color={semantic.textStrong} />
+              <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 16, color: semantic.textStrong, flex: 1 }}>{label}</Text>
+              <Icon name="chevron-right" size={18} color={semantic.textFaint} />
+            </Pressable>
+          ))}
+        </View>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+/** Human-readable file size, e.g. 1.2 MB / 340 KB / 512 B. */
+function humanSize(n: number): string {
+  if (!n || n < 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** A picked local uri (file:/blob:/data:) is already plaintext — never decrypt it. Mirrors VoiceBubble's sourceUri split. */
+function isLocalUri(uri: string): boolean {
+  return /^(file|blob|data):/.test(uri);
+}
+
+/**
+ * Phase Z — a non-image attachment's bubble: icon + name + size, decrypt-to-
+ * temp + open/share on tap. `mediaPath` is either the sender's own local
+ * plaintext pick (nothing to decrypt) or the server's ciphertext blob (needs
+ * `convoKey` + `file.nonce` to recover the original bytes first). Native
+ * writes the recovered bytes to a real temp file and hands it to the OS
+ * share sheet; web has no filesystem, so it triggers a browser download via
+ * a Blob object URL instead.
+ */
+function FileChip({ file, mediaPath, convoKey, mine }: { file: NonNullable<Message['file']>; mediaPath?: string; convoKey: string | null; mine: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const fg = mine ? semantic.bubbleMeText : semantic.bubbleThemText;
+
+  const open = async () => {
+    if (busy || !mediaPath) return;
+    setBusy(true);
+    setError(false);
+    try {
+      let bytes: Uint8Array;
+      if (isLocalUri(mediaPath)) {
+        bytes =
+          Platform.OS === 'web'
+            ? new Uint8Array(await (await fetch(mediaPath)).arrayBuffer())
+            : await new File(mediaPath).bytes();
+      } else {
+        if (!convoKey) throw new Error('no conversation key yet');
+        const res = await fetch(fileUrl(mediaPath));
+        if (!res.ok) throw new Error(`download failed (${res.status})`);
+        const ciphertext = new Uint8Array(await res.arrayBuffer());
+        const plain = decryptBytes(convoKey, file.nonce, ciphertext);
+        if (!plain) throw new Error('decrypt failed');
+        bytes = plain;
+      }
+
+      if (Platform.OS === 'web') {
+        // Cast needed: TS's Uint8Array<ArrayBufferLike> vs. BlobPart's
+        // stricter Uint8Array<ArrayBuffer> — a lib.dom typing mismatch only,
+        // Blob accepts any typed array at runtime.
+        const blob = new Blob([bytes as BlobPart], { type: file.mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        const tmp = new File(Paths.cache, file.name);
+        if (tmp.exists) tmp.delete();
+        tmp.write(bytes);
+        await Share.share({ url: tmp.uri, title: file.name });
+      }
+    } catch (err) {
+      console.warn('[FileChip] open failed', err);
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Pressable
+      onPress={open}
+      disabled={busy}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 190, paddingVertical: 2 }}
+    >
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: radius.md,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: mine ? 'rgba(255,255,255,0.22)' : semantic.brandSoft,
+        }}
+      >
+        {busy ? <ActivityIndicator size="small" color={fg} /> : <Icon name={error ? 'lock' : 'file-text'} size={16} color={fg} />}
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text numberOfLines={1} style={{ fontFamily: fontFamily.bodySemibold, fontSize: 14, color: fg }}>
+          {file.name}
+        </Text>
+        <Text style={{ fontFamily: fontFamily.mono, fontSize: 11, color: mine ? 'rgba(255,255,255,0.85)' : semantic.textMuted }}>
+          {error ? "Couldn't open" : humanSize(file.size)}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function FriendChatMsg({ m, mine, authorName, receipt, convoKey }: { m: Message; mine: boolean; authorName: string; receipt?: { read: number; total: number }; convoKey: string | null }) {
   if (m.locked) {
     return (
       <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
@@ -205,6 +399,12 @@ function FriendChatMsg({ m, mine, authorName, receipt }: { m: Message; mine: boo
     <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
   ) : m.kind === 'voice' && m.mediaPath ? (
     <VoiceBubble mediaPath={m.mediaPath} durationMs={m.durationMs} mine={mine} />
+  ) : m.kind === 'file' && m.file && m.mediaPath ? (
+    m.file.mime.startsWith('image/') ? (
+      <EncryptedImage mediaPath={m.mediaPath} mime={m.file.mime} nonce={m.file.nonce} convoKey={convoKey} w={m.file.w} h={m.file.h} />
+    ) : (
+      <FileChip file={m.file} mediaPath={m.mediaPath} convoKey={convoKey} mine={mine} />
+    )
   ) : undefined;
   return (
     <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>

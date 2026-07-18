@@ -6,3 +6,5 @@ export { PresenceDot } from './PresenceDot';
 export type { PresenceDotProps, PresenceState } from './PresenceDot';
 export { VoiceBubble } from './VoiceBubble';
 export type { VoiceBubbleProps } from './VoiceBubble';
+export { EncryptedImage } from './EncryptedImage';
+export type { EncryptedImageProps } from './EncryptedImage';

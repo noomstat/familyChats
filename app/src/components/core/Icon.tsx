@@ -74,6 +74,8 @@ import {
   QrCode,
   ScanLine,
   Clipboard,
+  Paperclip,
+  FileText,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -161,6 +163,10 @@ const REGISTRY: Record<string, LucideIcon> = {
   'qr-code': QrCode,
   'scan-line': ScanLine,
   clipboard: Clipboard,
+  // Phase Z — friend-chat attachments: the composer's attach affordance and
+  // the non-image file-chip glyph.
+  paperclip: Paperclip,
+  'file-text': FileText,
 };
 
 export type IconName = keyof typeof REGISTRY;
