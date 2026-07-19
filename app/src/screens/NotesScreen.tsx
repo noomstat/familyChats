@@ -7,6 +7,7 @@ import { Icon, IconButton, Input, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { useActions, useE2EE, useFamily, useNotes, type Note } from '../store';
 import { timeLabel } from '../store/model';
+import { fileUrl } from '../api/client';
 import type { FamilyStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<FamilyStackParamList, 'Notes'>;
@@ -62,6 +63,7 @@ export function NotesScreen({ navigation }: Props) {
               key={note.id}
               note={note}
               authorName={memberOf(note.createdBy)?.name}
+              authorPhoto={memberOf(note.createdBy)?.photoUrl}
               onPress={() => {
                 if (!note.locked) setEditing(note);
               }}
@@ -87,11 +89,13 @@ export function NotesScreen({ navigation }: Props) {
 function NoteCard({
   note,
   authorName,
+  authorPhoto,
   onPress,
   onRemove,
 }: {
   note: Note;
   authorName?: string;
+  authorPhoto?: string | null;
   onPress: () => void;
   onRemove: () => void;
 }) {
@@ -144,7 +148,7 @@ function NoteCard({
         </Text>
       )}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-        {authorName && <Avatar name={authorName} size={18} />}
+        {authorName && <Avatar src={fileUrl(authorPhoto)} name={authorName} size={18} />}
         <Text style={{ fontSize: 11, color: semantic.textFaint }}>
           {[authorName, timeLabel(Date.parse(note.updatedAt))].filter(Boolean).join(' · ')}
         </Text>

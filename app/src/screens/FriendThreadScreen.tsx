@@ -33,6 +33,7 @@ import {
   useFriends,
   useLive,
   useMessages,
+  usePhotoOf,
   useReadCursors,
   useSession,
 } from '../store';
@@ -51,6 +52,7 @@ export function FriendThreadScreen({ route, navigation }: Props) {
   const convoKey = useConversationKey(group.id);
   const live = useLive(group.id);
   const sharing = !!live;
+  const photoOf = usePhotoOf();
   const [draft, setDraft] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareSheetOpen, setShareSheetOpen] = useState(false);
@@ -60,6 +62,10 @@ export function FriendThreadScreen({ route, navigation }: Props) {
   const nameOf = useCallback((id: string) => group.memberNames?.[id] ?? friends.find((f) => f.id === id)?.name ?? id, [group.memberNames, friends]);
   const title = friendConvoDisplayName(group, session?.userId);
   const isGroup = group.members.length > 2;
+  // A DM's header shows the other member's photo; a named group has no single
+  // photo to show — stays name-initial (undefined src, matches the header
+  // Avatar's existing behavior below).
+  const otherId = !isGroup ? group.members.find((id) => id !== session?.userId) : undefined;
 
   useFocusEffect(
     useCallback(() => {
@@ -128,7 +134,7 @@ export function FriendThreadScreen({ route, navigation }: Props) {
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top', 'bottom']}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingTop: 4, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: semantic.borderSubtle, backgroundColor: semantic.surfaceCard }}>
         <IconButton name="chevron-left" variant="ghost" accessibilityLabel="Back" onPress={() => navigation.goBack()} />
-        <Avatar name={title} size={40} presence={sharing ? 'live' : null} />
+        <Avatar src={fileUrl(photoOf(otherId))} name={title} size={40} presence={sharing ? 'live' : null} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
             <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 17, color: semantic.textStrong }}>{title}</Text>
@@ -424,6 +430,7 @@ function FriendChatMsg({ m, mine, authorName, receipt, convoKey }: { m: Message;
 function FriendGroupSettingsSheet({ group, onClose, onLeft }: { group: ChatGroup; onClose: () => void; onLeft: () => void }) {
   const actions = useActions();
   const friends = useFriends();
+  const photoOf = usePhotoOf();
   const [name, setName] = useState(group.name);
   const [saving, setSaving] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -492,7 +499,7 @@ function FriendGroupSettingsSheet({ group, onClose, onLeft }: { group: ChatGroup
           <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>Members ({memberList.length})</Text>
           {memberList.map((m) => (
             <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Avatar name={m.name} size={34} />
+              <Avatar src={fileUrl(photoOf(m.id))} name={m.name} size={34} />
               <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{m.name}</Text>
             </View>
           ))}

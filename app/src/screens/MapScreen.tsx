@@ -6,7 +6,8 @@ import { Icon, IconButton } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { PresenceDot } from '../components/chat';
 import { MapPin, LivePill } from '../components/location';
-import { useFamily, useGroup, useLiveGroups, useLive, useSession } from '../store';
+import { useFamily, useGroup, useLiveGroups, useLive, usePhotoOf, useSession } from '../store';
+import { fileUrl } from '../api/client';
 
 // Fixed pin positions on the stylised map; names are filled from the live group.
 const SLOTS = [
@@ -24,6 +25,7 @@ export function MapScreen() {
   const live = useLive(activeId ?? '');
   const session = useSession();
   const family = useFamily();
+  const photoOf = usePhotoOf();
   const nameOf = (id: string) => family?.members.find((m) => m.id === id)?.name ?? id;
 
   if (!group) {
@@ -46,7 +48,9 @@ export function MapScreen() {
   const otherIds = group.members.filter((id) => id !== myId);
   const others = otherIds.map(nameOf);
   const onMap = [nameOf(myId ?? ''), ...others].slice(0, SLOTS.length);
-  const onTheWay: [string, string][] = others.slice(0, 2).map((n, i) => [n, DISTANCES[i] ?? '']);
+  const onTheWay: { id: string; name: string; meta: string }[] = otherIds
+    .slice(0, 2)
+    .map((id, i) => ({ id, name: nameOf(id), meta: DISTANCES[i] ?? '' }));
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top']}>
@@ -90,9 +94,9 @@ export function MapScreen() {
             <Text style={{ fontFamily: fontFamily.displayBold, fontSize: 16, color: semantic.textStrong }}>On the way</Text>
             <LivePill timeLeft={live?.expiresLabel ?? 'Sharing'} compact />
           </View>
-          {onTheWay.map(([n, meta]) => (
-            <View key={n} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-              <Avatar name={n} size={38} presence="live" />
+          {onTheWay.map(({ id, name: n, meta }) => (
+            <View key={id} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+              <Avatar src={fileUrl(photoOf(id))} name={n} size={38} presence="live" />
               <View style={{ flex: 1 }}>
                 <Text style={{ fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{n}</Text>
                 <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted }}>{meta}</Text>

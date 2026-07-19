@@ -22,6 +22,7 @@ import {
   useReadCursors,
   useSession,
 } from '../store';
+import { fileUrl } from '../api/client';
 import type { FamilyMember } from '../api/client';
 import type { ChatsStackParamList, RootTabParamList } from '../navigation/types';
 
@@ -448,7 +449,7 @@ function GroupSettingsSheet({
           <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 13, color: semantic.textMuted }}>Members ({memberList.length})</Text>
           {memberList.map((m) => (
             <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Avatar name={m.name} size={34} />
+              <Avatar src={fileUrl(m.photoUrl)} name={m.name} size={34} />
               <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{m.name}</Text>
             </View>
           ))}

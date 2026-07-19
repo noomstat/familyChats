@@ -7,6 +7,7 @@ import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { DatePickerCalendar } from '../components/DatePickerCalendar';
 import { useActions, useFamily, useTasks } from '../store';
+import { fileUrl } from '../api/client';
 import type { FamilyMember, ServerTask, TaskRecurrence } from '../api/client';
 import type { FamilyStackParamList } from '../navigation/types';
 
@@ -215,7 +216,7 @@ function TaskRow({
         )}
       </View>
 
-      {assignee && <Avatar name={assignee.name} size={28} />}
+      {assignee && <Avatar src={fileUrl(assignee.photoUrl)} name={assignee.name} size={28} />}
       <IconButton name="x" variant="ghost" size="sm" accessibilityLabel="Delete task" onPress={onRemove} />
     </Pressable>
   );

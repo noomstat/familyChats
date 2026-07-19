@@ -32,6 +32,7 @@ export {
   useAlbums,
   useAlbumPhotos,
   useFriends,
+  usePhotoOf,
   useIdentityReady,
 } from './AppStore';
 export type { AppState, ChatRow, ChatGroup, Session, FamilyState, FinanceState } from './AppStore';

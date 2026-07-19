@@ -7,6 +7,7 @@ import { Icon, IconButton, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { ConversationRow } from '../components/chat';
 import { useActions, useFriendChatRows, useFriends, useGroups } from '../store';
+import { fileUrl } from '../api/client';
 import type { Friend } from '../api/client';
 import type { FriendsStackParamList } from '../navigation/types';
 
@@ -118,7 +119,7 @@ function FriendRow({ friend, loading, onPress }: { friend: Friend; loading?: boo
         ...shadow.xs,
       }}
     >
-      <Avatar name={friend.name} size={44} />
+      <Avatar src={fileUrl(friend.photoUrl)} name={friend.name} size={44} />
       <View style={{ flex: 1 }}>
         <Text style={{ fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{friend.name}</Text>
         <Text style={{ fontSize: 12, color: semantic.textMuted }}>@{friend.username}</Text>

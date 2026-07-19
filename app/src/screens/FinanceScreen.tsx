@@ -18,6 +18,7 @@ import {
   useCategories,
   useFamily,
   useFinance,
+  usePhotoOf,
   useSession,
 } from '../store';
 import { fileUrl } from '../api/client';
@@ -46,6 +47,7 @@ export function FinanceScreen({ navigation }: Props) {
 
   const members = family?.members ?? [];
   const nameOf = (id: string) => (id === session?.userId ? 'You' : members.find((m) => m.id === id)?.name ?? id);
+  const photoOf = usePhotoOf();
 
   const budgetAmount = finance.budget?.amount ?? 0;
   const over = budgetAmount > 0 && finance.remaining < 0;
@@ -125,8 +127,8 @@ export function FinanceScreen({ navigation }: Props) {
               />
             </>
           )}
-          {view === 'people' && <ByPeople summary={finance.summary} me={session?.userId} nameOf={nameOf} actions={actions} />}
-          {view === 'breakdown' && <Breakdown summary={finance.summary} members={members} me={session?.userId} nameOf={nameOf} />}
+          {view === 'people' && <ByPeople summary={finance.summary} me={session?.userId} nameOf={nameOf} photoOf={photoOf} actions={actions} />}
+          {view === 'breakdown' && <Breakdown summary={finance.summary} members={members} me={session?.userId} nameOf={nameOf} photoOf={photoOf} />}
         </View>
       </ScrollView>
 
@@ -301,11 +303,13 @@ function ByPeople({
   summary,
   me,
   nameOf,
+  photoOf,
   actions,
 }: {
   summary: { people: FinPersonBalance[] };
   me?: string;
   nameOf: (id: string) => string;
+  photoOf: (id: string) => string | undefined;
   actions: ReturnType<typeof useActions>;
 }) {
   const you = summary.people.find((p) => p.userId === me);
@@ -318,7 +322,7 @@ function ByPeople({
         const theyOweMe = !isYou && p.net < 0;
         return (
           <View key={p.userId} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4 }}>
-            <Avatar name={nameOf(p.userId)} size={42} ring={isYou} />
+            <Avatar src={fileUrl(photoOf(p.userId))} name={nameOf(p.userId)} size={42} ring={isYou} />
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={{ fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{nameOf(p.userId)}</Text>
               <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted }}>
@@ -354,11 +358,13 @@ function Breakdown({
   members,
   me,
   nameOf,
+  photoOf,
 }: {
   summary: { memberBreakdown: FinMemberBreakdown[]; familyBreakdown: FinFamilyBreakdown };
   members: FamilyMember[];
   me?: string;
   nameOf: (id: string) => string;
+  photoOf: (id: string) => string | undefined;
 }) {
   const [mode, setMode] = useState<BreakdownMode>('member');
   return (
@@ -401,7 +407,7 @@ function Breakdown({
               key={m.userId}
               style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4 }}
             >
-              <Avatar name={nameOf(m.userId)} size={42} ring={m.userId === me} />
+              <Avatar src={fileUrl(photoOf(m.userId))} name={nameOf(m.userId)} size={42} ring={m.userId === me} />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={{ fontFamily: fontFamily.bodySemibold, color: semantic.textStrong, fontSize: 15 }}>{nameOf(m.userId)}</Text>
               </View>

@@ -28,6 +28,8 @@ export interface ApiUser {
   id: string;
   username: string;
   name: string;
+  /** Profile photo — a public identity image, NOT E2EE (see server's POST /me/photo). '/uploads/<name>' path, or null/absent if never set — resolve via fileUrl(). */
+  photoUrl?: string | null;
 }
 
 export interface FamilyMember {
@@ -37,6 +39,8 @@ export interface FamilyMember {
   role: 'owner' | 'member';
   /** Phase Y — this member's currently published X25519 identity public key, or null if they've never published one — what the auto-grant sweep (grantKeysToKeylessMembers) wraps the family anchor key to. */
   publicKey?: string | null;
+  /** Profile photo — '/uploads/<name>' path, or null/absent if never set — resolve via fileUrl(). */
+  photoUrl?: string | null;
 }
 
 export interface FamilyInfo {
@@ -104,6 +108,16 @@ export function authLogout(token: string) {
 
 export function getMe(token: string) {
   return api<{ user: ApiUser; families: FamilyInfo[]; activeFamilyId: string | null }>('/me', { token });
+}
+
+/**
+ * Uploads a new profile photo (a public identity image, NOT E2EE — see
+ * server's POST /me/photo). The server broadcasts the update live to every
+ * family + friend this user has, so their avatar updates on other devices
+ * without a manual refresh — see store/AppStore.tsx's setProfilePhoto action.
+ */
+export function setProfilePhoto(token: string, file: UploadFile) {
+  return uploadFile<{ photoUrl: string }>(token, '/me/photo', file);
 }
 
 // ── Family Space ─────────────────────────────────────────────
@@ -554,9 +568,18 @@ export interface ServerPhoto {
   ts: string;
 }
 
-/** Absolute URL for a server file path like '/uploads/<name>'. */
-export function fileUrl(path: string): string {
-  return `${API_BASE_URL}${path}`;
+/**
+ * Absolute URL for a server file path like '/uploads/<name>'. Overloaded so a
+ * definite `string` (the common case — album photos, receipts) always gets a
+ * definite `string` back, while a possibly-unset path (e.g. store/AppStore.tsx's
+ * usePhotoOf(), which returns undefined when a user has no photo) passes
+ * through as undefined instead of building a bogus URL — lets call sites write
+ * `src={fileUrl(photoOf(id))}` directly without a null-check at every site.
+ */
+export function fileUrl(path: string): string;
+export function fileUrl(path: string | null | undefined): string | undefined;
+export function fileUrl(path: string | null | undefined): string | undefined {
+  return path ? `${API_BASE_URL}${path}` : undefined;
 }
 
 /** A local file to upload, as handed back by a picker (photos) or recorder (voice). */
@@ -873,6 +896,8 @@ export interface Friend {
   username: string;
   /** Base64 X25519 public key, or null if that friend has never published one. */
   publicKey: string | null;
+  /** Profile photo — '/uploads/<name>' path, or null if never set — resolve via fileUrl(). */
+  photoUrl: string | null;
 }
 
 export interface FriendCode {

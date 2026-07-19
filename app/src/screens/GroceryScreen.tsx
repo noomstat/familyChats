@@ -6,6 +6,7 @@ import { colors, semantic, fontFamily, fontSize, radius } from '../theme';
 import { Icon, IconButton, Input, Button, Chip } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { useActions, useFamily, useGrocery } from '../store';
+import { fileUrl } from '../api/client';
 import type { ServerGroceryItem } from '../api/client';
 import type { FamilyStackParamList } from '../navigation/types';
 
@@ -38,6 +39,7 @@ export function GroceryScreen({ navigation }: Props) {
   };
 
   const nameOf = (id: string | null) => family?.members.find((m) => m.id === id)?.name;
+  const photoOf = (id: string | null) => family?.members.find((m) => m.id === id)?.photoUrl;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top']}>
@@ -76,6 +78,7 @@ export function GroceryScreen({ navigation }: Props) {
                 key={item.id}
                 item={item}
                 checkerName={nameOf(item.checkedBy)}
+                checkerPhoto={photoOf(item.checkedBy)}
                 onToggle={() => actions.toggleGrocery(item.id)}
                 onRemove={() => actions.removeGrocery(item.id)}
               />
@@ -124,11 +127,13 @@ export function GroceryScreen({ navigation }: Props) {
 function GroceryRow({
   item,
   checkerName,
+  checkerPhoto,
   onToggle,
   onRemove,
 }: {
   item: ServerGroceryItem;
   checkerName?: string;
+  checkerPhoto?: string | null;
   onToggle: () => void;
   onRemove: () => void;
 }) {
@@ -166,7 +171,7 @@ function GroceryRow({
         {item.label}
       </Text>
       {!!item.qty && <Chip tone="neutral">{item.qty}</Chip>}
-      {checked && !!checkerName && <Avatar name={checkerName} size={22} />}
+      {checked && !!checkerName && <Avatar src={fileUrl(checkerPhoto)} name={checkerName} size={22} />}
     </Pressable>
   );
 }

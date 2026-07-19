@@ -4,10 +4,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import QRCode from 'react-native-qrcode-svg';
+// Native-only picker for the tap-to-change avatar affordance below — imported
+// unconditionally (safe: expo-image-picker ships a web-compatible module, so
+// `expo export --platform web` still bundles — same rationale as AppStore.tsx's
+// addPhotoFromPicker), only INVOKING its native permission call is guarded by
+// Platform.OS below.
+import * as ImagePicker from 'expo-image-picker';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
 import { Icon, Switch, Card, Badge, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
 import { useActions, useFamilies, useFamily, useFriends, useSession } from '../store';
+import { fileUrl } from '../api/client';
 import type { FamilyState } from '../store';
 import type { RootTabParamList } from '../navigation/types';
 
@@ -20,6 +27,7 @@ const ROWS: [string, string, 'toggle' | 'chev'][] = [
 
 export function YouScreen() {
   const [live, setLive] = useState(true);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const session = useSession();
   const family = useFamily();
   const families = useFamilies();
@@ -28,11 +36,52 @@ export function YouScreen() {
 
   const displayName = session?.name ?? 'You';
 
+  /** Tap-to-change avatar: pick a photo from the library and upload it as the profile photo. */
+  const pickProfilePhoto = async () => {
+    if (uploadingPhoto) return;
+    if (Platform.OS !== 'web') {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsMultipleSelection: false });
+    if (result.canceled || !result.assets.length) return;
+    const asset = result.assets[0];
+    const mimeType = asset.mimeType ?? 'image/jpeg';
+    const name = asset.fileName ?? `photo-${Date.now()}.${mimeType.split('/')[1] ?? 'jpg'}`;
+    setUploadingPhoto(true);
+    try {
+      await actions.setProfilePhoto({ uri: asset.uri, name, mimeType });
+    } catch (err) {
+      console.warn('[YouScreen] setProfilePhoto failed', err);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: semantic.surfacePage }} edges={['top']}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 24 }}>
         <View style={{ alignItems: 'center', gap: 10, paddingVertical: 20 }}>
-          <Avatar name={displayName} size={88} ring />
+          <Pressable onPress={pickProfilePhoto} disabled={uploadingPhoto} style={{ position: 'relative' }} accessibilityLabel="Change profile photo">
+            <Avatar src={fileUrl(session?.photoUrl)} name={displayName} size={88} ring />
+            <View
+              style={{
+                position: 'absolute',
+                right: -2,
+                bottom: -2,
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                backgroundColor: semantic.brand,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 2,
+                borderColor: semantic.surfacePage,
+              }}
+            >
+              {uploadingPhoto ? <ActivityIndicator size="small" color={colors.white} /> : <Icon name="camera" size={14} color={colors.white} />}
+            </View>
+          </Pressable>
           <Text style={{ fontFamily: fontFamily.display, fontSize: 24, color: semantic.textStrong }}>{displayName}</Text>
           <Text style={{ fontFamily: fontFamily.mono, fontSize: 12, color: semantic.textMuted }}>
             @{session?.username ?? 'you'}
@@ -346,7 +395,7 @@ function AddMemberSheet({ family, onClose }: { family: Family; onClose: () => vo
         <View style={{ gap: 10 }}>
           {addable.map((f) => (
             <Pressable key={f.id} onPress={() => (addingId ? undefined : add(f.id))} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Avatar name={f.name} size={34} />
+              <Avatar src={fileUrl(f.photoUrl)} name={f.name} size={34} />
               <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{f.name}</Text>
               {addingId === f.id ? (
                 <ActivityIndicator size="small" color={semantic.textMuted} />
@@ -360,7 +409,7 @@ function AddMemberSheet({ family, onClose }: { family: Family; onClose: () => vo
             if (!f) return null;
             return (
               <View key={id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, opacity: 0.6 }}>
-                <Avatar name={f.name} size={34} />
+                <Avatar src={fileUrl(f.photoUrl)} name={f.name} size={34} />
                 <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 15, color: semantic.textStrong }}>{f.name}</Text>
                 <Badge tone="brand" size="sm">
                   Added

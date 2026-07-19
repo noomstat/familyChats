@@ -71,6 +71,7 @@ import {
   createFamily as apiCreateFamily,
   createFriendGroup as apiCreateFriendGroup,
   createGroup as apiCreateGroup,
+  fileUrl,
   getAlbumPhotos,
   getBootstrap,
   getFriendCode,
@@ -101,6 +102,7 @@ import {
   renameFriendGroup as apiRenameFriendGroup,
   renameGroup as apiRenameGroup,
   setActiveFamilyId as apiSetActiveFamilyId,
+  setProfilePhoto as apiSetProfilePhoto,
   toggleGroceryItem,
   toggleTaskItem,
   updateEventItem,
@@ -130,6 +132,8 @@ export interface Session {
   userId: string;
   username: string;
   name: string;
+  /** Profile photo — '/uploads/<name>' path, or null/undefined if never set — resolve via usePhotoOf()/fileUrl(). */
+  photoUrl?: string | null;
 }
 
 export interface FamilyState {
@@ -1443,7 +1447,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         if (persistedActiveFamilyId) apiSetActiveFamilyId(persistedActiveFamilyId);
         const { user, families, activeFamilyId } = await getMe(token);
         if (cancelled) return;
-        dispatch({ type: 'SET_SESSION', session: { token, userId: user.id, username: user.username, name: user.name } });
+        dispatch({ type: 'SET_SESSION', session: { token, userId: user.id, username: user.username, name: user.name, photoUrl: user.photoUrl ?? null } });
         dispatch({ type: 'FAMILY_CONTEXT', families: families.map(toFamilyState), activeFamilyId });
         apiSetActiveFamilyId(activeFamilyId);
         if (activeFamilyId) await AsyncStorage.setItem(ACTIVE_FAMILY_KEY, activeFamilyId).catch(() => {});
@@ -2188,11 +2192,26 @@ export function useActions() {
         if (token) removePhotoItem(token, photoId).catch((err) => console.warn('[store] removePhoto failed', err));
       },
 
+      /**
+       * Uploads `file` (already picked by the caller — see YouScreen's
+       * tap-to-change avatar) as this user's new profile photo, then updates
+       * the local session so the change is visible immediately. A public
+       * identity image, NOT E2EE — the server broadcasts the update to every
+       * family + friend this user has (`family/members` + `friend/upsert` WS
+       * events), which the existing FAMILY_PATCH/FRIEND_UPSERT reducer cases
+       * already pick up — nothing else to refresh here.
+       */
+      setProfilePhoto: async (file: UploadFile): Promise<void> => {
+        if (!token || !state.session) throw new Error('not signed in');
+        const { photoUrl } = await apiSetProfilePhoto(token, file);
+        dispatch({ type: 'SET_SESSION', session: { ...state.session, photoUrl } });
+      },
+
       /** Log in an existing user, persist the token, and hydrate families + active family. */
       login: async (username: string, password: string) => {
         const { token: newToken, user } = await authLogin({ username, password });
         await tokenStorage.set(newToken);
-        dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name } });
+        dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name, photoUrl: user.photoUrl ?? null } });
         try {
           const me = await getMe(newToken);
           dispatch({ type: 'FAMILY_CONTEXT', families: me.families.map(toFamilyState), activeFamilyId: me.activeFamilyId });
@@ -2209,7 +2228,7 @@ export function useActions() {
         await authRegister({ username, password, name });
         const { token: newToken, user } = await authLogin({ username, password });
         await tokenStorage.set(newToken);
-        dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name } });
+        dispatch({ type: 'SET_SESSION', session: { token: newToken, userId: user.id, username: user.username, name: user.name, photoUrl: user.photoUrl ?? null } });
         dispatch({ type: 'FAMILY_CONTEXT', families: [], activeFamilyId: null }); // brand-new account: never in a family yet
       },
 
@@ -2544,6 +2563,8 @@ export interface ChatRow {
   time: string;
   unread: number;
   live: boolean;
+  /** A 1:1 DM's other member's profile photo, absolute URL (fileUrl()'d already) — undefined for a family group/friend group row, which stay name-initial avatars (see useFriendChatRows). */
+  avatarSrc?: string;
 }
 
 function messagePreview(m: Message | undefined, myId: string | undefined, nameOf: (id: string) => string): string {
@@ -2605,6 +2626,11 @@ export function useFriendChatRows(): ChatRow[] {
         const msgs = state.messages[g.id];
         const last = msgs && msgs.length ? msgs[msgs.length - 1] : undefined;
         const nameOf = (id: string) => g.memberNames?.[id] ?? id;
+        // A DM (<=2 members) shows the other member's photo, same rule as
+        // friendConvoDisplayName's name fallback; a 3+-member friend group
+        // has no single photo to show — stays name-initial (undefined here).
+        const otherId = g.members.length <= 2 ? g.members.find((id) => id !== myId) : undefined;
+        const avatarSrc = otherId ? fileUrl(state.friends.find((f) => f.id === otherId)?.photoUrl) : undefined;
         return {
           id: g.id,
           name: friendConvoDisplayName(g, myId),
@@ -2613,12 +2639,13 @@ export function useFriendChatRows(): ChatRow[] {
           time: last ? timeLabel(last.ts) : '',
           unread: state.unread[g.id] ?? 0,
           live: !!state.live[g.id],
+          avatarSrc,
           _lastTs: last?.ts ?? 0,
         };
       });
     rows.sort((a, b) => b._lastTs - a._lastTs || a.name.localeCompare(b.name));
     return rows.map(({ _lastTs, ...row }) => row);
-  }, [state.groups, state.messages, state.unread, state.live, state.session]);
+  }, [state.groups, state.messages, state.unread, state.live, state.session, state.friends]);
 }
 
 export function useMessages(groupId: string): Message[] {
@@ -2827,6 +2854,30 @@ export function useAlbumPhotos(albumId: string): ServerPhoto[] | undefined {
 export function useFriends(): Friend[] {
   const { state } = useCtx();
   return useMemo(() => [...state.friends].sort((a, b) => a.name.localeCompare(b.name)), [state.friends]);
+}
+
+/**
+ * Profile-photo resolver: given a user id, returns their raw photo_url path
+ * (or undefined if unset/unknown) — call sites do `src={fileUrl(photoOf(id))}`
+ * (fileUrl's overload passes undefined straight through, so no extra
+ * null-check is needed at the call site). Checked in order: the session
+ * user (so "my own" avatar reflects a just-uploaded photo instantly, without
+ * waiting for the active family's roster to refresh), the active family's
+ * members, then friends — covers every screen that shows a specific user's
+ * avatar (chat threads, family member lists, friends list) without needing
+ * to know which of those three buckets the id came from.
+ */
+export function usePhotoOf(): (userId: string | undefined | null) => string | undefined {
+  const { state } = useCtx();
+  return useMemo(() => {
+    return (userId: string | undefined | null): string | undefined => {
+      if (!userId) return undefined;
+      if (state.session?.userId === userId) return state.session.photoUrl ?? undefined;
+      const member = state.family?.members.find((m) => m.id === userId);
+      if (member?.photoUrl) return member.photoUrl;
+      return state.friends.find((f) => f.id === userId)?.photoUrl ?? undefined;
+    };
+  }, [state.session, state.family, state.friends]);
 }
 
 /** Phase U — true once this device's identity keypair exists and its public key has been published this session. */
