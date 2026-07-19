@@ -13,7 +13,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { colors, semantic, fontFamily, fontSize, radius, shadow } from '../theme';
 import { Icon, Switch, Card, Badge, Button } from '../components/core';
 import { Avatar } from '../components/core/Avatar';
-import { useActions, useFamilies, useFamily, useFriends, useSession } from '../store';
+import { useActions, useE2EE, useFamilies, useFamily, useFriends, useSession } from '../store';
 import { fileUrl } from '../api/client';
 import type { FamilyState } from '../store';
 import type { RootTabParamList } from '../navigation/types';
@@ -331,9 +331,54 @@ function E2EECard({ family }: { family: Family }) {
       </Pressable>
       {showAddMember && <AddMemberSheet family={family} onClose={() => setShowAddMember(false)} />}
 
+      <GrantAccessRow />
       {family.role === 'owner' && <RotateKeyRow />}
       <LeaveFamilyRow family={family} />
     </Card>
+  );
+}
+
+/**
+ * Phase Y — the family key is delivered by an existing key-holder wrapping it
+ * to a newcomer's public key (auto on load). This is the manual trigger: any
+ * device that HOLDS the key can push it to every member still waiting, across
+ * all their families. Hidden on devices that don't hold the key (there's
+ * nothing to grant from there — they're the ones waiting).
+ */
+function GrantAccessRow() {
+  const actions = useActions();
+  const { hasKey } = useE2EE();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
+  if (!hasKey) return null;
+
+  const grant = async () => {
+    setBusy(true);
+    setMsg(null);
+    setErr(false);
+    try {
+      const n = await actions.grantFamilyAccess();
+      setMsg(n > 0 ? `Granted access to ${n} member${n === 1 ? '' : 's'}.` : 'Everyone already has access.');
+    } catch {
+      setErr(true);
+      setMsg('Could not grant access — try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={{ borderTopWidth: 1, borderTopColor: semantic.borderSubtle, paddingTop: 10, gap: 6 }}>
+      <Pressable onPress={grant} disabled={busy} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <Icon name="key" size={16} color={semantic.textBody} />
+        <Text style={{ flex: 1, fontFamily: fontFamily.bodySemibold, fontSize: 14, color: semantic.textStrong }}>
+          {busy ? 'Granting…' : 'Grant access to waiting members'}
+        </Text>
+        <Icon name="chevron-right" size={16} color={semantic.textFaint} />
+      </Pressable>
+      {!!msg && <Text style={{ fontSize: fontSize.bodySm, color: err ? semantic.danger : semantic.textMuted }}>{msg}</Text>}
+    </View>
   );
 }
 

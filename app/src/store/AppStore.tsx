@@ -567,13 +567,14 @@ function seedFamilyMemberKeyHolders(familyId: string, holderIds: string[]): void
 export async function grantKeysToKeylessMembers(
   family: { id: string; members: FamilyMember[] } | null | undefined,
   token: string | undefined,
-): Promise<void> {
-  if (!family || !token || !myIdentity) return;
+): Promise<number> {
+  if (!family || !token || !myIdentity) return 0;
   const ring = await keyStorage.getRing(family.id);
   const anchorKey = ring?.[0];
-  if (!anchorKey) return; // don't hold this family's ring — nothing to grant
+  if (!anchorKey) return 0; // don't hold this family's ring — nothing to grant
 
   const holders = familyMemberKeyHoldersCache[family.id] ?? new Set<string>();
+  let granted = 0;
   for (const member of family.members) {
     if (holders.has(member.id) || member.id === myUserId) continue;
     if (!member.publicKey) continue; // hasn't published an identity key yet — nothing to wrap to
@@ -582,11 +583,23 @@ export async function grantKeysToKeylessMembers(
       const wrapped = await wrapKey(pairwise, anchorKey);
       await apiGrantFamilyKey(token, family.id, { memberId: member.id, wrapped });
       holders.add(member.id);
+      granted += 1;
     } catch (err) {
       console.warn('[store] grantFamilyKey failed', member.id, err);
     }
   }
   familyMemberKeyHoldersCache[family.id] = holders;
+  return granted;
+}
+
+/** Sweep EVERY family this device holds a ring for (not just the active one), so a key-holder unblocks waiting members regardless of which family is active. Returns the total granted. */
+export async function grantKeysAcrossFamilies(
+  families: { id: string; members: FamilyMember[] }[],
+  token: string | undefined,
+): Promise<number> {
+  let total = 0;
+  for (const fam of families) total += await grantKeysToKeylessMembers(fam, token);
+  return total;
 }
 
 // ── Server <-> store message mapping ─────────────────────────
@@ -1363,6 +1376,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   // useRealtime.ts's activeFamilyIdRef/groupIdsRef).
   const familyRef = useRef(state.family);
   familyRef.current = state.family;
+  const familiesRef = useRef(state.families);
+  familiesRef.current = state.families;
 
   // Load persisted state once on mount.
   useEffect(() => {
@@ -1479,14 +1494,15 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         applyIncomingFamilyMemberKeys(payload.familyMemberKeys, token, dispatch).catch((err) =>
           console.warn('[store] familyMemberKeys apply failed', err),
         );
-        // Phase Y — if this device holds the active family's ring, auto-grant
-        // it to any keyless member this bootstrap just revealed.
-        if (familyRef.current) {
-          seedFamilyMemberKeyHolders(familyRef.current.id, payload.familyMemberKeyHolders);
-          grantKeysToKeylessMembers(familyRef.current, token).catch((err) =>
-            console.warn('[store] auto-grant sweep failed', err),
-          );
-        }
+        // Phase Y — if this device holds a family's ring, auto-grant it to any
+        // keyless member. Sweep EVERY family this user is in (not just the
+        // active one) so a lone key-holder unblocks waiting members in all
+        // their families the moment they come online, regardless of which
+        // family is currently active.
+        if (familyRef.current) seedFamilyMemberKeyHolders(familyRef.current.id, payload.familyMemberKeyHolders);
+        grantKeysAcrossFamilies(familiesRef.current, token).catch((err) =>
+          console.warn('[store] auto-grant sweep failed', err),
+        );
       })
       .catch((err) => console.warn('[store] bootstrap failed', err));
     return () => {
@@ -2369,6 +2385,18 @@ export function useActions() {
         const keys = [...familyKeyRing.keys, newKey];
         familyKeyRing = { familyId, keys };
         await keyStorage.setRing(familyId, keys);
+      },
+
+      /**
+       * On-demand version of the auto-grant sweep — a key-holder can push the
+       * family key to every waiting (keyless-but-published) member across ALL
+       * their families. Returns how many members were newly granted. This is
+       * what the "Grant access" control calls so a holder can unblock a member
+       * who's stuck on "waiting…" without relying on a background sweep firing.
+       */
+      grantFamilyAccess: async (): Promise<number> => {
+        if (!token) throw new Error('not signed in');
+        return grantKeysAcrossFamilies(state.families, token);
       },
 
       // ── Phase X — family membership: add-from-friends, leave ───
