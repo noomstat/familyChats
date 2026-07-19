@@ -166,6 +166,7 @@ export function FriendThreadScreen({ route, navigation }: Props) {
               m={item}
               mine={item.authorId === session?.userId}
               authorName={item.authorName ?? nameOf(item.authorId)}
+              avatarSrc={fileUrl(photoOf(item.authorId))}
               receipt={item.authorId === session?.userId ? receiptFor(item) : undefined}
               convoKey={convoKey}
             />
@@ -385,35 +386,32 @@ function FileChip({ file, mediaPath, convoKey, mine }: { file: NonNullable<Messa
   );
 }
 
-function FriendChatMsg({ m, mine, authorName, receipt, convoKey }: { m: Message; mine: boolean; authorName: string; receipt?: { read: number; total: number }; convoKey: string | null }) {
-  if (m.locked) {
-    return (
-      <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
-        <ChatBubble mine={mine} author={mine ? undefined : authorName} style={{ opacity: 0.55 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Icon name="lock" size={13} color={mine ? semantic.bubbleMeText : semantic.bubbleThemText} />
-            <Text style={{ fontFamily: fontFamily.body, fontSize: 14, fontStyle: 'italic', color: mine ? semantic.bubbleMeText : semantic.bubbleThemText }}>
-              Encrypted message
-            </Text>
-          </View>
-        </ChatBubble>
-      </View>
-    );
-  }
+function FriendChatMsg({ m, mine, authorName, avatarSrc, receipt, convoKey }: { m: Message; mine: boolean; authorName: string; avatarSrc?: string; receipt?: { read: number; total: number }; convoKey: string | null }) {
+  const attachment =
+    m.locked ? undefined
+    : m.loc ? (
+      <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
+    ) : m.kind === 'voice' && m.mediaPath ? (
+      <VoiceBubble mediaPath={m.mediaPath} durationMs={m.durationMs} mine={mine} />
+    ) : m.kind === 'file' && m.file && m.mediaPath ? (
+      m.file.mime.startsWith('image/') ? (
+        <EncryptedImage mediaPath={m.mediaPath} mime={m.file.mime} nonce={m.file.nonce} convoKey={convoKey} w={m.file.w} h={m.file.h} />
+      ) : (
+        <FileChip file={m.file} mediaPath={m.mediaPath} convoKey={convoKey} mine={mine} />
+      )
+    ) : undefined;
 
-  const attachment = m.loc ? (
-    <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
-  ) : m.kind === 'voice' && m.mediaPath ? (
-    <VoiceBubble mediaPath={m.mediaPath} durationMs={m.durationMs} mine={mine} />
-  ) : m.kind === 'file' && m.file && m.mediaPath ? (
-    m.file.mime.startsWith('image/') ? (
-      <EncryptedImage mediaPath={m.mediaPath} mime={m.file.mime} nonce={m.file.nonce} convoKey={convoKey} w={m.file.w} h={m.file.h} />
-    ) : (
-      <FileChip file={m.file} mediaPath={m.mediaPath} convoKey={convoKey} mine={mine} />
-    )
-  ) : undefined;
-  return (
-    <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
+  const column = m.locked ? (
+    <ChatBubble mine={mine} author={mine ? undefined : authorName} style={{ opacity: 0.55 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Icon name="lock" size={13} color={mine ? semantic.bubbleMeText : semantic.bubbleThemText} />
+        <Text style={{ fontFamily: fontFamily.body, fontSize: 14, fontStyle: 'italic', color: mine ? semantic.bubbleMeText : semantic.bubbleThemText }}>
+          Encrypted message
+        </Text>
+      </View>
+    </ChatBubble>
+  ) : (
+    <>
       <ChatBubble mine={mine} author={mine ? undefined : authorName} attachment={attachment}>
         {m.kind === 'text' ? m.text : undefined}
       </ChatBubble>
@@ -422,6 +420,13 @@ function FriendChatMsg({ m, mine, authorName, receipt, convoKey }: { m: Message;
           {receipt.total === 0 ? '✓' : `${receipt.read === receipt.total ? '✓✓' : '✓'} ${receipt.read}/${receipt.total}`}
         </Text>
       )}
+    </>
+  );
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, justifyContent: mine ? 'flex-end' : 'flex-start' }}>
+      {!mine && <Avatar src={avatarSrc} name={authorName} size={28} />}
+      <View style={{ alignItems: mine ? 'flex-end' : 'flex-start', flexShrink: 1 }}>{column}</View>
     </View>
   );
 }

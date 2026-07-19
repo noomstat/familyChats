@@ -19,6 +19,7 @@ import {
   useHasMore,
   useLive,
   useMessages,
+  usePhotoOf,
   useReadCursors,
   useSession,
 } from '../store';
@@ -46,6 +47,7 @@ export function ThreadScreen({ route, navigation }: Props) {
   const live = useLive(routeGroup.id);
   const sharing = !!live;
   const actions = useActions();
+  const photoOf = usePhotoOf();
   const { enabled: e2ee, hasKey } = useE2EE();
   const [draft, setDraft] = useState('');
   const [sheet, setSheet] = useState(false);
@@ -225,7 +227,7 @@ export function ThreadScreen({ route, navigation }: Props) {
           contentContainerStyle={{ padding: 14, gap: 10 }}
           style={{ backgroundColor: semantic.surfacePage }}
           renderItem={({ item }) => (
-            <ChatMsg m={item} mine={item.authorId === session?.userId} authorName={item.authorName ?? nameOf(item.authorId)} receipt={item.authorId === session?.userId ? receiptFor(item) : undefined} />
+            <ChatMsg m={item} mine={item.authorId === session?.userId} authorName={item.authorName ?? nameOf(item.authorId)} avatarSrc={fileUrl(photoOf(item.authorId))} receipt={item.authorId === session?.userId ? receiptFor(item) : undefined} />
           )}
           onEndReached={loadEarlier}
           onEndReachedThreshold={0.4}
@@ -305,31 +307,27 @@ export function ThreadScreen({ route, navigation }: Props) {
   );
 }
 
-function ChatMsg({ m, mine, authorName, receipt }: { m: Message; mine: boolean; authorName: string; receipt?: { read: number; total: number } }) {
-  if (m.locked) {
+function ChatMsg({ m, mine, authorName, avatarSrc, receipt }: { m: Message; mine: boolean; authorName: string; avatarSrc?: string; receipt?: { read: number; total: number } }) {
+  const attachment =
+    !m.locked && m.loc ? (
+      <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
+    ) : !m.locked && m.kind === 'voice' && m.mediaPath ? (
+      <VoiceBubble mediaPath={m.mediaPath} durationMs={m.durationMs} mine={mine} />
+    ) : undefined;
+
+  const column = m.locked ? (
     // Tamper/wrong-key/no-key — all three render identically here (the app
     // can't distinguish them, and shouldn't try to guess which).
-    return (
-      <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
-        <ChatBubble mine={mine} author={mine ? undefined : authorName} style={{ opacity: 0.55 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Icon name="lock" size={13} color={mine ? semantic.bubbleMeText : semantic.bubbleThemText} />
-            <Text style={{ fontFamily: fontFamily.body, fontSize: 14, fontStyle: 'italic', color: mine ? semantic.bubbleMeText : semantic.bubbleThemText }}>
-              Encrypted message
-            </Text>
-          </View>
-        </ChatBubble>
+    <ChatBubble mine={mine} author={mine ? undefined : authorName} style={{ opacity: 0.55 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Icon name="lock" size={13} color={mine ? semantic.bubbleMeText : semantic.bubbleThemText} />
+        <Text style={{ fontFamily: fontFamily.body, fontSize: 14, fontStyle: 'italic', color: mine ? semantic.bubbleMeText : semantic.bubbleThemText }}>
+          Encrypted message
+        </Text>
       </View>
-    );
-  }
-
-  const attachment = m.loc ? (
-    <LocationTile label={m.loc.label} meta={m.loc.meta} live={m.live} pinIcon={m.live ? 'navigation' : 'map-pin'} height={100} />
-  ) : m.kind === 'voice' && m.mediaPath ? (
-    <VoiceBubble mediaPath={m.mediaPath} durationMs={m.durationMs} mine={mine} />
-  ) : undefined;
-  return (
-    <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
+    </ChatBubble>
+  ) : (
+    <>
       <ChatBubble mine={mine} author={mine ? undefined : authorName} attachment={attachment}>
         {m.kind === 'text' ? m.text : undefined}
       </ChatBubble>
@@ -340,6 +338,15 @@ function ChatMsg({ m, mine, authorName, receipt }: { m: Message; mine: boolean; 
             : `${receipt.read === receipt.total ? '✓✓' : '✓'} ${receipt.read}/${receipt.total}`}
         </Text>
       )}
+    </>
+  );
+
+  // Others' messages get the sender's avatar tucked to the bottom-left; my own
+  // stay right-aligned with no avatar (I know who I am).
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, justifyContent: mine ? 'flex-end' : 'flex-start' }}>
+      {!mine && <Avatar src={avatarSrc} name={authorName} size={28} />}
+      <View style={{ alignItems: mine ? 'flex-end' : 'flex-start', flexShrink: 1 }}>{column}</View>
     </View>
   );
 }
