@@ -28,7 +28,7 @@ function unauthorized(message = 'Unauthorized') {
 /** Strip password_hash before a user row ever leaves this module. */
 function toPublicUser(row) {
   if (!row) return row;
-  return { id: row.id, username: row.username, name: row.name };
+  return { id: row.id, username: row.username, name: row.name, photoUrl: row.photo_url ?? null };
 }
 
 /**
@@ -55,7 +55,7 @@ export async function register({ id, username, password, name }) {
 
   const { rows } = await query(
     `INSERT INTO users (id, username, name, password_hash) VALUES ($1, $2, $3, $4)
-     RETURNING id, username, name`,
+     RETURNING id, username, name, photo_url`,
     [userId, username, name.trim(), passwordHash],
   );
   return toPublicUser(rows[0]);
@@ -67,7 +67,7 @@ export async function login({ username, password }) {
     throw badRequest('username and password required');
   }
 
-  const { rows } = await query('SELECT id, username, name, password_hash FROM users WHERE username = $1', [username]);
+  const { rows } = await query('SELECT id, username, name, password_hash, photo_url FROM users WHERE username = $1', [username]);
   const row = rows[0];
   if (!row) throw unauthorized('invalid username or password');
 
@@ -87,6 +87,22 @@ export async function logout(token) {
 }
 
 /**
+ * Sets (or clears, `photoUrl: null`) this user's profile photo — a public
+ * identity image, NOT E2EE (see server.js's POST/DELETE /me/photo). Returns
+ * the updated public user plus whatever photo_url was set before the call,
+ * so the caller can best-effort unlink the now-orphaned old upload.
+ */
+export async function setUserPhoto({ userId, photoUrl }) {
+  const { rows: oldRows } = await query('SELECT photo_url FROM users WHERE id = $1', [userId]);
+  const oldPhotoUrl = oldRows[0]?.photo_url ?? null;
+  const { rows } = await query(
+    'UPDATE users SET photo_url = $1 WHERE id = $2 RETURNING id, username, name, photo_url',
+    [photoUrl, userId],
+  );
+  return { user: toPublicUser(rows[0]), oldPhotoUrl };
+}
+
+/**
  * Look up the user behind a session token, or null if the token is invalid
  * or expired (last_seen older than SESSION_TTL_MS — lazily deleted on the
  * way out, since there's no need to keep a dead session row around).
@@ -94,7 +110,7 @@ export async function logout(token) {
 export async function getSessionUser(token) {
   if (!token) return null;
   const { rows } = await query(
-    `SELECT u.id, u.username, u.name, s.last_seen
+    `SELECT u.id, u.username, u.name, u.photo_url, s.last_seen
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token = $1`,
     [token],
@@ -123,7 +139,7 @@ export async function requireAuth(req, res, next) {
 
     const { rows } = await query(
       `UPDATE sessions SET last_seen = now() WHERE token = $1
-       RETURNING (SELECT row_to_json(u) FROM (SELECT id, username, name FROM users WHERE id = sessions.user_id) u) AS user`,
+       RETURNING (SELECT row_to_json(u) FROM (SELECT id, username, name, photo_url AS "photoUrl" FROM users WHERE id = sessions.user_id) u) AS user`,
       [token],
     );
     const user = rows[0]?.user;

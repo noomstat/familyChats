@@ -28,3 +28,7 @@ Thumbs.db
 
 # Design import artifact (one-time bundle)
 familychats.bundle
+
+# local receipt test images (not part of the app)
+Gmail/
+Gmail.zip

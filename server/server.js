@@ -1,15 +1,28 @@
 // API process (`npm start`). Auth, Family Space, device tokens, and the WS hub.
 // Does NOT send pushes itself — notifyUsers() only enqueues; the worker sends.
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { unlink } from 'node:fs/promises';
 import express from 'express';
 import { getBoss, stopBoss } from './src/queue.js';
 import { notifyUsers, registerToken, removeToken } from './src/notifications.js';
 import { pool, query } from './src/db.js';
-import { register, login, logout, requireAuth } from './src/auth.js';
-import { createFamily, joinFamily, getFamilyByIdForUser, listFamiliesForUser, regenerateCode, addKeyRoll, addMemberFromFriend, grantFamilyKey, leaveFamily } from './src/family.js';
+import { register, login, logout, requireAuth, setUserPhoto } from './src/auth.js';
+import {
+  createFamily,
+  joinFamily,
+  getFamilyByIdForUser,
+  listFamiliesForUser,
+  regenerateCode,
+  addKeyRoll,
+  addMemberFromFriend,
+  grantFamilyKey,
+  leaveFamily,
+  memberRows,
+  listFamilyIdsForUser,
+} from './src/family.js';
 import { runWithFamily, getActiveFamilyId } from './src/requestContext.js';
-import { attachWebSocketServer } from './src/ws.js';
+import { attachWebSocketServer, broadcastToFamily, broadcastToUsers } from './src/ws.js';
 import {
   getBootstrap,
   getSyncSince,
@@ -35,7 +48,7 @@ import {
 } from './src/lists.js';
 import { listEvents, addEvent, updateEvent, removeEvent } from './src/events.js';
 import { listNotes, addNote, updateNote, removeNote } from './src/notes.js';
-import { publishKey, getFriends, getMyFriendCode, connectByQr } from './src/friends.js';
+import { publishKey, getFriends, getMyFriendCode, connectByQr, getFriendProfile, listFriendIds } from './src/friends.js';
 import { openDm, createFriendGroup, addFriendGroupMember, leaveFriendGroup, renameFriendGroup } from './src/friendChat.js';
 import { upload, uploadEncrypted, UPLOADS_DIR } from './src/uploads.js';
 import {
@@ -146,6 +159,53 @@ app.get('/me', requireAuth, resolveFamily, async (req, res, next) => {
     const families = await listFamiliesForUser(req.user.id);
     const activeFamilyId = getActiveFamilyId();
     res.json({ user: req.user, families, activeFamilyId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Profile photo — a public identity image, NOT E2EE (stored plaintext like
+// album photos/receipts, reusing `upload`'s image-mime allowlist). Fans out
+// live to every family + friend this user has so their avatar updates
+// everywhere without a manual refresh, mirroring the family/members and
+// friend/upsert broadcasts other membership-shape changes already use.
+async function broadcastProfilePhoto(userId) {
+  const familyIds = await listFamilyIdsForUser(userId);
+  for (const familyId of familyIds) {
+    const members = await memberRows(familyId);
+    await broadcastToFamily(familyId, { type: 'family', action: 'members', familyId, members });
+  }
+  const friendIds = await listFriendIds(userId);
+  if (friendIds.length) {
+    const profile = await getFriendProfile(userId);
+    if (profile) broadcastToUsers(friendIds, { type: 'friend', action: 'upsert', friend: profile });
+  }
+}
+
+app.post('/me/photo', requireAuth, resolveFamily, upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'file is required' });
+    if (!req.file.mimetype.startsWith('image/')) {
+      await unlink(req.file.path).catch(() => {});
+      return res.status(400).json({ error: `expected an image file, got ${req.file.mimetype}` });
+    }
+    const photoUrl = `/uploads/${req.file.filename}`;
+    const { oldPhotoUrl } = await setUserPhoto({ userId: req.user.id, photoUrl });
+    if (oldPhotoUrl) await unlink(path.join(UPLOADS_DIR, path.basename(oldPhotoUrl))).catch(() => {});
+    await broadcastProfilePhoto(req.user.id);
+    res.json({ photoUrl });
+  } catch (err) {
+    if (req.file) await unlink(req.file.path).catch(() => {});
+    next(err);
+  }
+});
+
+app.delete('/me/photo', requireAuth, resolveFamily, async (req, res, next) => {
+  try {
+    const { oldPhotoUrl } = await setUserPhoto({ userId: req.user.id, photoUrl: null });
+    if (oldPhotoUrl) await unlink(path.join(UPLOADS_DIR, path.basename(oldPhotoUrl))).catch(() => {});
+    await broadcastProfilePhoto(req.user.id);
+    res.json({ photoUrl: null });
   } catch (err) {
     next(err);
   }

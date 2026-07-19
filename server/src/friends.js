@@ -35,7 +35,7 @@ function randomToken() {
 }
 
 function mapFriendRow(row) {
-  return { id: row.id, name: row.name, username: row.username, publicKey: row.public_key };
+  return { id: row.id, name: row.name, username: row.username, publicKey: row.public_key, photoUrl: row.photo_url ?? null };
 }
 
 /**
@@ -61,7 +61,7 @@ export async function publishKey({ userId, publicKey }) {
 /** Every friend of `userId`, with their current public key (null if that friend has never published one). */
 export async function getFriends(userId) {
   const { rows } = await query(
-    `SELECT u.id, u.name, u.username, uk.public_key
+    `SELECT u.id, u.name, u.username, u.photo_url, uk.public_key
      FROM friendships f
      JOIN users u ON u.id = f.friend_id
      LEFT JOIN user_keys uk ON uk.user_id = f.friend_id
@@ -70,6 +70,24 @@ export async function getFriends(userId) {
     [userId],
   );
   return rows.map(mapFriendRow);
+}
+
+/** Every friend id of `userId` — used to fan out a live profile-photo update (see server.js's POST/DELETE /me/photo). */
+export async function listFriendIds(userId) {
+  const { rows } = await query('SELECT friend_id FROM friendships WHERE user_id = $1', [userId]);
+  return rows.map((r) => r.friend_id);
+}
+
+/** This user's own profile as their friends see it (mirrors mapFriendRow's shape) — used to broadcast a live profile-photo update to every friend (see server.js's POST/DELETE /me/photo). Null if the user has no row here (shouldn't happen for an authed caller, but defensive). */
+export async function getFriendProfile(userId) {
+  const { rows } = await query(
+    `SELECT u.id, u.name, u.username, u.photo_url, uk.public_key
+     FROM users u
+     LEFT JOIN user_keys uk ON uk.user_id = u.id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  return rows[0] ? mapFriendRow(rows[0]) : null;
 }
 
 /**
@@ -102,7 +120,7 @@ export async function connectByQr({ userId, friendId, token, myPublicKey }) {
   if (typeof myPublicKey !== 'string' || !myPublicKey.trim()) throw badRequest('myPublicKey is required');
   if (friendId === userId) throw badRequest("can't connect to yourself");
 
-  const { rows: friendRows } = await query('SELECT id, name, username FROM users WHERE id = $1', [friendId]);
+  const { rows: friendRows } = await query('SELECT id, name, username, photo_url FROM users WHERE id = $1', [friendId]);
   const friendUser = friendRows[0];
   if (!friendUser) throw notFound('no such user');
 
@@ -127,11 +145,23 @@ export async function connectByQr({ userId, friendId, token, myPublicKey }) {
     [userId, friendId],
   );
 
-  const { rows: meRows } = await query('SELECT id, name, username FROM users WHERE id = $1', [userId]);
+  const { rows: meRows } = await query('SELECT id, name, username, photo_url FROM users WHERE id = $1', [userId]);
   const meUser = meRows[0];
 
-  const newFriendForCaller = { id: friendUser.id, name: friendUser.name, username: friendUser.username, publicKey: friendKey.public_key };
-  const newFriendForTarget = { id: meUser.id, name: meUser.name, username: meUser.username, publicKey: myPublicKey.trim() };
+  const newFriendForCaller = {
+    id: friendUser.id,
+    name: friendUser.name,
+    username: friendUser.username,
+    publicKey: friendKey.public_key,
+    photoUrl: friendUser.photo_url ?? null,
+  };
+  const newFriendForTarget = {
+    id: meUser.id,
+    name: meUser.name,
+    username: meUser.username,
+    publicKey: myPublicKey.trim(),
+    photoUrl: meUser.photo_url ?? null,
+  };
 
   broadcastToUsers([userId], { type: 'friend', action: 'upsert', friend: newFriendForCaller });
   broadcastToUsers([friendId], { type: 'friend', action: 'upsert', friend: newFriendForTarget });

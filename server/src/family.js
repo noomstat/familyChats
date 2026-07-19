@@ -43,9 +43,9 @@ function randomCode(length = 6) {
 // family anchor key to. Flows through every caller of memberRows
 // (getFamilyByIdForUser/listFamiliesForUser/joinFamily's `members` broadcast/
 // addMemberFromFriend/leaveFamily), same as every other member field here.
-async function memberRows(familyId) {
+export async function memberRows(familyId) {
   const { rows } = await query(
-    `SELECT u.id, u.name, u.username, fm.role, uk.public_key
+    `SELECT u.id, u.name, u.username, u.photo_url, fm.role, uk.public_key
      FROM family_members fm
      JOIN users u ON u.id = fm.user_id
      LEFT JOIN user_keys uk ON uk.user_id = u.id
@@ -53,7 +53,20 @@ async function memberRows(familyId) {
      ORDER BY fm.role = 'owner' DESC, fm.joined_at ASC`,
     [familyId],
   );
-  return rows.map((r) => ({ id: r.id, name: r.name, username: r.username, role: r.role, publicKey: r.public_key ?? null }));
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    username: r.username,
+    role: r.role,
+    publicKey: r.public_key ?? null,
+    photoUrl: r.photo_url ?? null,
+  }));
+}
+
+/** Every family id `userId` belongs to — used to fan out a live profile-photo update to every family this user is in (see server.js's POST/DELETE /me/photo). */
+export async function listFamilyIdsForUser(userId) {
+  const { rows } = await query('SELECT family_id FROM family_members WHERE user_id = $1', [userId]);
+  return rows.map((r) => r.family_id);
 }
 
 /**
